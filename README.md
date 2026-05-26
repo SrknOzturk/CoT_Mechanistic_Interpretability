@@ -1,41 +1,60 @@
-# Mechanistic Interpretability Framework: Attention Head Patching & Ablation
+# Mechanistic Interpretability of Chain-of-Thought Reasoning in Math Word Problems
 
-This framework provides a modular implementation for investigating the internal decision-making processes of Large Language Models (LLMs). By utilizing **Activation Patching** and **Zero-Ablation** techniques, this project allows researchers to isolate specific attention heads and quantify their causal contribution to the model's reasoning capabilities, particularly on mathematical word problem datasets like **SVAMP**.
+This repository contains the official implementation for the paper: **"Mechanistic Interpretability of Chain-of-Thought Reasoning in Math Word Problems: CoT as a Meta-Controller"**.
 
 ## 🚀 Overview
+In this work, we hypothesize that Chain-of-Thought (CoT) prompting acts as a **meta-controller** within the network, dynamically coordinating and activating specific problem-solving sub-circuits. We introduce **Sequential Multi-Head Patching**, a novel interpretability method that maps these functional circuits by analyzing activation flow across multiple tokens.
 
-Mechanistic interpretability aims to reverse-engineer the "black box" of neural networks. This repository automates the identification and validation of critical attention heads:
-
-* **Patching:** Probes which attention heads in the model carry critical information for a specific task (e.g., CoT reasoning) by injecting activations from clean prompts into corrupted ones.
-* **Ablation:** Validates the causal necessity of these heads by zeroing out their activations (zero-ablation) and measuring the impact on model performance.
-
-## 📂 Project Structure
-
+## 📂 Repository Structure
 ```text
 .
-├── data/               # Raw and processed datasets (e.g., SVAMP)
-├── experiments/        # Execution scripts for experiments
-├── results/            # JSON/CSV outputs from patching and ablation runs
+├── data/               # SVAMP dataset and processed subsets
+├── experiments/        # Scripts for running patching and ablation experiments
+├── results/            # JSON/CSV outputs from experiment runs
 ├── src/                # Core implementation logic:
-│   ├── ablation.py     # Ablation hooks and control experiment logic
-│   ├── data_loader.py  # Dataset handling
+│   ├── ablation.py     # Zero-ablation hooks and control experiment logic
+│   ├── data_loader.py  # Dataset handling and pre-processing
 │   ├── metrics.py      # JSD and Margin Recovery Ratio factories
 │   ├── patching.py     # Activation patching primitives
-│   ├── pipelines.py    # Orchestration pipelines for patching sweeps
+│   ├── pipelines.py    # Orchestration pipelines for experiments
 │   └── utils.py        # General helpers (NER, POS, generation, decoding)
 ├── requirements.txt    # Project dependencies
 └── README.md
 
 ```
 
+## 🛠 Setup & Installation
+
+1. **Clone the repository:**
+```bash
+git clone <repository-url>
+cd <project-directory>
+
+```
+
+
+2. **Install dependencies:**
+```bash
+pip install -r requirements.txt
+
+```
+
+
+3. **Configure NLP tools:**
+```bash
+python -m spacy download en_core_web_sm
+
+```
+
+
 
 ## 📊 Workflow
 
-To perform a complete interpretability analysis, execute the following steps in order:
+To replicate the study's findings, execute the following steps:
 
 ### 1. Patching (Exploration)
 
-Identify the heads that are most important for the model's output distribution. This generates the "importance map" needed for ablation.
+Identify the attention heads most critical to the model's output distribution using sequential patching.
 
 ```bash
 python experiments/run_patching.py
@@ -44,16 +63,15 @@ python experiments/run_patching.py
 
 ### 2. Ablation (Validation)
 
-Test the causal necessity of the identified heads by zeroing them out and measuring performance impact (Accuracy/Recovery Score).
+Validate the causal necessity of the identified heads by zeroing out their activations (zero-ablation) and measuring the performance impact.
 
 ```bash
 python experiments/run_ablation.py
 
 ```
 
-## 🔍 Methodology Highlights
+## 🔍 Methodology
 
-* **Metric Factories:** Includes flexible factories for Margin Recovery Ratio (MRR) and Jensen-Shannon Divergence (JSD).
-* **Cross-Patching:** Supports experiments where Chain-of-Thought (CoT) traces are patched across different problem instances.
-* **Control Experiments:** Implements random head ablation to serve as a baseline for statistical significance.
+* **Sequential Multi-Head Patching:** Unlike naive single-token intervention, our approach tracks the causal influence of heads across the full reasoning trace.
+* **Meta-Controller Hypothesis:** We investigate how CoT tokens coordinate activation flow to calculation and abstraction sub-circuits.
 
