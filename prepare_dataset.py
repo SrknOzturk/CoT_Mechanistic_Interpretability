@@ -22,7 +22,7 @@ if __name__ == "__main__":
     create_and_save_balanced_subset(
         input_json_path=PROCESSED_DATA_PATH,
         output_json_path=SUBSET_DATA_PATH,
-        n_samples=3,
+        n_samples=4,
         random_state=42
     )
     

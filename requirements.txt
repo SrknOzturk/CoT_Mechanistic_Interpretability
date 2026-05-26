@@ -1,0 +1,17 @@
+# --- Core Deep Learning & Mechanistic Interpretability ---
+torch>=2.0.0
+transformer-lens>=1.15.0
+transformers>=4.40.0
+einops>=0.7.0
+
+# --- Data Manipulation & Analysis ---
+pandas>=2.0.0
+numpy>=1.24.0
+
+# --- Visualization & Progress ---
+matplotlib>=3.7.0
+tqdm>=4.65.0
+
+# --- NLP / POS Tagging / NER ---
+nltk>=3.8.0
+spacy>=3.7.0
