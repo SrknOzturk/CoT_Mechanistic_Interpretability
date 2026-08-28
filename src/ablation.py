@@ -1,251 +1,574 @@
 """
 src/ablation.py
-This module contains the logic for attention head ablation, 
-including hook generation, random sampling strategies, and 
-the end-to-end ablation execution pipelines.
+
+Zero-ablation verification experiments.
+
+Two prompt conditions are ablated: No-CoT and CoT. Each is scored three ways --
+unablated, with the selected heads zeroed, and with a random head set of the
+same size zeroed (the control).
+
+Generation runs with the ablation hooks attached for the whole trajectory rather
+than re-applied per token, so the heads stay silent across the entire reasoning
+chain instead of only at the answer position.
 """
 
-import torch
+import json
+import os
 import random
-import pandas as pd
+import re
 from collections import defaultdict
-from typing import List, Tuple, Optional, Any
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+import pandas as pd
+import torch
+from tqdm.auto import tqdm
 from transformer_lens import HookedTransformer
 
-# Import helpers from utils
+from src.tasks import get_task
+from src.templates import get_template
 from src.utils import (
+    _append_token,
+    _decode,
+    _decode_generated_only,
+    _decode_single_token,
     build_heads_by_example_id_from_curated,
-    generate_with_optional_ablation,
-    generate_cot_with_optional_ablation,
-    make_direct_equation_prompt_from_row,
-    make_nocot_prompt_from_row,
-    make_cot_prompt_from_row,
-    extract_last_number,
-    numeric_equal,
-    get_example_id_from_row,
     get_answer_from_row,
+    get_example_id_from_row,
     get_type_from_row,
-    generate_with_till_answer_optional_ablation
+    make_cot_prompt_from_row,
+    make_nocot_prompt_from_row,
+    make_zero_ablation_hooks,
+    sample_random_heads_same_count_for_example,
 )
 
 # ============================================================
-# 1. Ablation Hook Logic
+# Generation under ablation
 # ============================================================
 
-def make_zero_ablation_hooks(heads: List[Tuple[int, int]]) -> List[Tuple[str, Callable]]:
+def _generate_with_ablation(
+    model,
+    prompt,
+    ablated_heads=None,
+    max_new_tokens=1024,
+    context_window=2048,
+    prepend_bos=True,
+    print_tokens=False,
+    task=None,
+):
     """
-    Creates hooks that zero out the 'hook_z' activations for the specified heads.
-    
-    Args:
-        heads: List of (layer, head) tuples to ablate.
+    Greedy generation with the given heads zeroed for the whole trajectory.
+
+    Runs in two phases:
+      1. generate until the task's answer trigger appears
+      2. keep generating while the tokens still belong to the answer
+
+    Phase 2 is what makes multi-token answers work: 92 arrives as "9" + "2", and
+    True can arrive as "Tr" + "ue". The task owns that decision, because digits
+    and words need different gates.
+
+    Returns the generated text only, never the prompt, so no BOS handling is
+    needed downstream.
     """
-    if not heads:
-        return []
+    task = task or get_task()
+    device = next(model.parameters()).device
+    model.reset_hooks()
 
-    layer_dict = defaultdict(list)
-    for layer, head in heads:
-        layer_dict[int(layer)].append(int(head))
+    input_tokens = model.to_tokens(prompt, prepend_bos=prepend_bos).to(device)
+    output_tokens = input_tokens.clone()
+    hooks = make_zero_ablation_hooks(ablated_heads) if ablated_heads else []
 
-    hooks = []
-    for layer, head_list in layer_dict.items():
-        hook_name = f"blocks.{layer}.attn.hook_z"
+    def _loop():
+        nonlocal output_tokens
+        generated = 0
 
-        def hook_fn(z, hook, head_list=head_list):
-            # Zero out the output of the specified heads at all positions
-            for h in head_list:
-                z[:, :, h, :] = 0.0
-            return z
+        with torch.no_grad():
+            # phase 1 -- reason until the answer trigger
+            current_text = _decode(model, output_tokens)
+            while not task.ends_reasoning(current_text) and generated < max_new_tokens:
+                logits = model(output_tokens[:, -context_window:])
+                next_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
+                output_tokens = _append_token(output_tokens, next_token)
+                generated += 1
+                if print_tokens:
+                    print(generated, repr(_decode_single_token(model, next_token)))
+                current_text = _decode(model, output_tokens)
 
-        hooks.append((hook_name, hook_fn))
+            # the trigger never appeared: hand back whatever was produced
+            if not task.ends_reasoning(current_text):
+                return _decode_generated_only(model, input_tokens, output_tokens)
 
-    return hooks
+            # phase 2 -- collect the answer tokens
+            while generated < max_new_tokens:
+                logits = model(output_tokens[:, -context_window:])
+                next_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
+                token_str = _decode_single_token(model, next_token)
+                if not task.is_answer_continuation(token_str):
+                    break
+                output_tokens = _append_token(output_tokens, next_token)
+                generated += 1
+                if print_tokens:
+                    print(generated, repr(token_str))
+
+        return _decode_generated_only(model, input_tokens, output_tokens)
+
+    if hooks:
+        # a single context for the whole trajectory keeps the heads ablated throughout
+        with model.hooks(fwd_hooks=hooks):
+            return _loop()
+    return _loop()
 
 
-def sample_random_heads_matched_layers_for_example(
-    model: HookedTransformer, 
-    selected_heads_list: List[Tuple[int, int]], 
-    seed: int = 42
-) -> List[Tuple[int, int]]:
+def generate_with_optional_ablation(
+    model, prompt, ablated_heads=None, max_new_tokens=1024, print_tokens=False, task=None
+):
+    """No-CoT condition: the prompt already ends at the answer trigger."""
+    return _generate_with_ablation(
+        model, prompt, ablated_heads=ablated_heads, max_new_tokens=max_new_tokens,
+        print_tokens=print_tokens, task=task,
+    )
+
+
+def generate_cot_with_optional_ablation(
+    model, prompt, ablated_heads=None, max_cot_reasoning_tokens=1024,
+    max_answer_tokens=None, print_tokens=False, task=None,
+):
     """
-    Randomly samples heads while maintaining the same layer distribution 
-    as the input list (Layer-matched control).
+    CoT condition: the model reasons first, then answers. max_answer_tokens is
+    accepted for call-site compatibility; the answer length is governed by the
+    task's continuation gate rather than by a separate budget.
     """
-    random.seed(seed)
-    n_heads = model.cfg.n_heads
-    layer_counts = defaultdict(int)
-
-    for layer, _ in selected_heads_list:
-        layer_counts[int(layer)] += 1
-
-    random_heads = []
-    for layer, count in layer_counts.items():
-        available_heads = list(range(n_heads))
-        chosen = random.sample(available_heads, count)
-        for h in chosen:
-            random_heads.append((layer, h))
-
-    return random_heads
-
-
-def sample_random_heads_same_count_for_example(
-    model: HookedTransformer, 
-    num_heads: int, 
-    seed: int = 42
-) -> List[Tuple[int, int]]:
-    """
-    Randomly samples heads from the entire pool of model heads.
-    """
-    random.seed(seed)
-    n_layers = model.cfg.n_layers
-    n_heads = model.cfg.n_heads
-
-    all_heads = [(layer, head) for layer in range(n_layers) for head in range(n_heads)]
-    if num_heads > len(all_heads):
-        num_heads = len(all_heads)
-
-    return random.sample(all_heads, num_heads)
+    return _generate_with_ablation(
+        model, prompt, ablated_heads=ablated_heads, max_new_tokens=max_cot_reasoning_tokens,
+        print_tokens=print_tokens, task=task,
+    )
 
 
 # ============================================================
-# 2. Experiment Pipelines
+# 7. NO-COT ABLATION
 # ============================================================
 
-def run_direct_equation_ablation_using_curated_heads(
-    sampled_df: pd.DataFrame,
-    model: HookedTransformer,
-    curated_normal_results: List[Dict],
-    selected_heads_key: str = "selected_heads",
-    max_examples: Optional[int] = None,
-    max_new_tokens: int = 2048,
-    random_seed: int = 42,
-    print_tokens: bool = False,
-    verbose: bool = False
-) -> pd.DataFrame:
+def run_nocot_ablation_using_curated_heads(
+    sampled_df,
+    model,
+    curated_normal_results,
+    selected_heads_key="selected_heads",
+    max_examples=None,
+    max_new_tokens=2048,
+    random_seed=42,
+    print_tokens=False,
+    verbose=False,
+    task=None,
+    template=None,
+):
     """
-    Runs Direct Equation ablation experiments comparing curated heads vs. random heads.
+    Her sampled_df örneği için:
+
+        1. No-CoT prompt oluşturulur.
+           Örn:
+               "... The answer is "
+
+        2. Normal No-CoT üretim yapılır.
+
+        3. Selected heads ablate edilerek No-CoT üretim yapılır.
+
+        4. Aynı sayıda random heads ablate edilerek kontrol üretimi yapılır.
     """
-    from tqdm import tqdm
-    heads_by_example_id = build_heads_by_example_id_from_curated(curated_normal_results, selected_heads_key)
+    task = task or get_task()
+    template = template or get_template()
+
+    heads_by_example_id = build_heads_by_example_id_from_curated(
+        curated_normal_results,
+        selected_heads_key
+    )
+
     results = []
 
     total = len(sampled_df) if max_examples is None else min(len(sampled_df), max_examples)
-    
-    for idx, row in tqdm(sampled_df.iterrows(), total=total, desc="Running Direct Equation Ablation"):
-        if max_examples is not None and idx >= max_examples:
-            break
+    pbar = tqdm(total=total, desc="Running No-CoT Ablation")
 
-        equation_prompt = make_direct_equation_prompt_from_row(row)
-        if equation_prompt is None: continue
+    count = 0
+
+    for idx, row in sampled_df.iterrows():
+        if max_examples is not None and count >= max_examples:
+            break
 
         example_id = get_example_id_from_row(row, idx)
         true_ans = get_answer_from_row(row)
         q_type = get_type_from_row(row)
 
+        nocot_prompt = make_nocot_prompt_from_row(row, template=template, task=task)
+
         selected_heads_list = heads_by_example_id.get(example_id, [])
         num_heads = len(selected_heads_list)
 
-        # 1. Normal Generation
-        normal_text = generate_with_till_answer_optional_ablation(model, equation_prompt, ablated_heads=None)
-        
-        # 2. Selected-head Ablation
-        ablation_text = generate_with_till_answer_optional_ablation(
-            model, equation_prompt, ablated_heads=selected_heads_list
-        ) if num_heads > 0 else None
+        # ------------------------------
+        # Normal generation
+        # ------------------------------
+        normal_text = generate_with_optional_ablation(
+            model,
+            nocot_prompt,
+            ablated_heads=None,
+            max_new_tokens=max_new_tokens,
+            print_tokens=print_tokens,
+            task=task,
+        )
 
-        # 3. Random-head Ablation
-        random_heads_list = sample_random_heads_matched_layers_for_example(model, selected_heads_list, seed=random_seed + idx) if num_heads > 0 else None
-        random_text = generate_with_till_answer_optional_ablation(
-            model, equation_prompt, ablated_heads=random_heads_list
-        ) if num_heads > 0 else None
+        normal_extracted = task.extract(normal_text)
+        normal_correct = task.answers_equal(normal_extracted, true_ans)
+
+        # ------------------------------
+        # Selected-head ablation
+        # ------------------------------
+        ablation_text = None
+        ablation_extracted = None
+        ablation_correct = None
+
+        if num_heads > 0:
+            ablation_text = generate_with_optional_ablation(
+                model,
+                nocot_prompt,
+                ablated_heads=selected_heads_list,
+                max_new_tokens=max_new_tokens,
+                print_tokens=print_tokens,
+                task=task,
+            )
+
+            ablation_extracted = task.extract(ablation_text)
+            ablation_correct = task.answers_equal(ablation_extracted, true_ans)
+
+        # ------------------------------
+        # Random-head ablation
+        # ------------------------------
+        random_text = None
+        random_extracted = None
+        random_correct = None
+        random_heads_list = None
+
+        if num_heads > 0:
+            random_heads_list = sample_random_heads_same_count_for_example(
+                model,
+                num_heads,
+                seed=random_seed + count
+            )
+
+            random_text = generate_with_optional_ablation(
+                model,
+                nocot_prompt,
+                ablated_heads=random_heads_list,
+                max_new_tokens=max_new_tokens,
+                print_tokens=print_tokens,
+                task=task,
+            )
+
+            random_extracted = task.extract(random_text)
+            random_correct = task.answers_equal(random_extracted, true_ans)
 
         results.append({
             "example_id": example_id,
             "Type": q_type,
-            "normal_correct": numeric_equal(extract_last_number(normal_text), true_ans),
-            "ablation_correct": numeric_equal(extract_last_number(ablation_text), true_ans) if ablation_text else False,
-            "random_correct": numeric_equal(extract_last_number(random_text), true_ans) if random_text else False,
+            "NoCotPrompt": nocot_prompt,
+            "true_answer": true_ans,
+            "selected_heads": selected_heads_list,
+            "random_heads": random_heads_list,
+            "num_heads_ablated": num_heads,
+
+            "normal_text": normal_text,
+            "normal_extracted": normal_extracted,
+            "normal_correct": normal_correct,
+
+            "ablation_text": ablation_text,
+            "ablation_extracted": ablation_extracted,
+            "ablation_correct": ablation_correct,
+
+            "random_text": random_text,
+            "random_extracted": random_extracted,
+            "random_correct": random_correct,
+
+            "correct": ablation_correct if ablation_correct is not None else False
         })
 
+        count += 1
+        pbar.update(1)
+
+        if verbose:
+            print("=" * 80)
+            print("example_id:", example_id)
+            print("prompt:", repr(nocot_prompt))
+            print("true:", true_ans)
+            print("normal:", repr(normal_text), normal_extracted, normal_correct)
+            print("ablated:", repr(ablation_text), ablation_extracted, ablation_correct)
+            print("random:", repr(random_text), random_extracted, random_correct)
+
+    pbar.close()
     return pd.DataFrame(results)
 
 
-def run_nocot_ablation_using_curated_heads(
-    sampled_df: pd.DataFrame,
-    model: HookedTransformer,
-    curated_normal_results: List[Dict],
-    selected_heads_key: str = "selected_heads",
-    max_examples: Optional[int] = None,
-    max_new_tokens: int = 2048,
-    random_seed: int = 42,
-    print_tokens: bool = False,
-    verbose: bool = False
-) -> pd.DataFrame:
-    """
-    Runs No-CoT ablation experiments.
-    """
-    from tqdm import tqdm
-    heads_by_example_id = build_heads_by_example_id_from_curated(curated_normal_results, selected_heads_key)
-    results = []
-
-    for idx, row in tqdm(sampled_df.iterrows(), total=len(sampled_df), desc="Running No-CoT Ablation"):
-        if max_examples is not None and idx >= max_examples: break
-
-        example_id = get_example_id_from_row(row, idx)
-        true_ans = get_answer_from_row(row)
-        nocot_prompt = make_nocot_prompt_from_row(row)
-        selected_heads_list = heads_by_example_id.get(example_id, [])
-        num_heads = len(selected_heads_list)
-
-        normal_text = generate_with_optional_ablation(model, nocot_prompt, ablated_heads=None)
-        ablation_text = generate_with_optional_ablation(model, nocot_prompt, ablated_heads=selected_heads_list) if num_heads > 0 else None
-        random_heads_list = sample_random_heads_same_count_for_example(model, num_heads, seed=random_seed + idx) if num_heads > 0 else None
-        random_text = generate_with_optional_ablation(model, nocot_prompt, ablated_heads=random_heads_list) if num_heads > 0 else None
-
-        results.append({
-            "example_id": example_id,
-            "normal_correct": numeric_equal(extract_last_number(normal_text), true_ans),
-            "ablation_correct": numeric_equal(extract_last_number(ablation_text), true_ans) if ablation_text else False,
-            "random_correct": numeric_equal(extract_last_number(random_text), true_ans) if random_text else False,
-        })
-    return pd.DataFrame(results)
-
+# ============================================================
+# 8. COT ABLATION
+# ============================================================
 
 def run_cot_ablation_using_curated_heads(
-    sampled_df: pd.DataFrame,
-    model: HookedTransformer,
-    curated_normal_results: List[Dict],
-    selected_heads_key: str = "selected_heads",
-    max_examples: Optional[int] = None,
-    max_cot_reasoning_tokens: int = 2048,
-    random_seed: int = 42,
-    print_tokens: bool = False,
-    verbose: bool = False
-) -> pd.DataFrame:
+    sampled_df,
+    model,
+    curated_normal_results,
+    selected_heads_key="selected_heads",
+    max_examples=None,
+    max_cot_reasoning_tokens=2048,
+    max_answer_tokens=None,
+    random_seed=42,
+    print_tokens=False,
+    verbose=False,
+    task=None,
+    template=None,
+):
     """
-    Runs CoT ablation experiments.
+    Her sampled_df örneği için:
+
+        1. CoT prompt oluşturulur.
+           Örn:
+               "... Let's think step by step."
+
+        2. Model token token reasoning üretir.
+
+        3. "The answer is " görünce numeric answer tamamlanır.
+
+        4. Selected heads ablation ve random heads control aynı generation loop içinde yapılır.
     """
-    from tqdm import tqdm
-    heads_by_example_id = build_heads_by_example_id_from_curated(curated_normal_results, selected_heads_key)
+    task = task or get_task()
+    template = template or get_template()
+
+    heads_by_example_id = build_heads_by_example_id_from_curated(
+        curated_normal_results,
+        selected_heads_key
+    )
+
     results = []
 
-    for idx, row in tqdm(sampled_df.iterrows(), total=len(sampled_df), desc="Running CoT Ablation"):
-        if max_examples is not None and idx >= max_examples: break
+    total = len(sampled_df) if max_examples is None else min(len(sampled_df), max_examples)
+    pbar = tqdm(total=total, desc="Running CoT Ablation")
+
+    count = 0
+
+    for idx, row in sampled_df.iterrows():
+        if max_examples is not None and count >= max_examples:
+            break
 
         example_id = get_example_id_from_row(row, idx)
         true_ans = get_answer_from_row(row)
-        cot_prompt = make_cot_prompt_from_row(row)
+        q_type = get_type_from_row(row)
+
+        cot_prompt = make_cot_prompt_from_row(row, template=template)
+
         selected_heads_list = heads_by_example_id.get(example_id, [])
         num_heads = len(selected_heads_list)
 
-        normal_text = generate_cot_with_optional_ablation(model, cot_prompt, ablated_heads=None)
-        ablation_text = generate_cot_with_optional_ablation(model, cot_prompt, ablated_heads=selected_heads_list) if num_heads > 0 else None
-        random_heads_list = sample_random_heads_same_count_for_example(model, num_heads, seed=random_seed + idx) if num_heads > 0 else None
-        random_text = generate_cot_with_optional_ablation(model, cot_prompt, ablated_heads=random_heads_list) if num_heads > 0 else None
+        # ------------------------------
+        # Normal generation
+        # ------------------------------
+        normal_text = generate_cot_with_optional_ablation(
+            model,
+            cot_prompt,
+            ablated_heads=None,
+            max_cot_reasoning_tokens=max_cot_reasoning_tokens,
+            max_answer_tokens=max_answer_tokens,
+            print_tokens=print_tokens,
+            task=task,
+        )
+
+        normal_extracted = task.extract(normal_text)
+        normal_correct = task.answers_equal(normal_extracted, true_ans)
+
+        # ------------------------------
+        # Selected-head ablation
+        # ------------------------------
+        ablation_text = None
+        ablation_extracted = None
+        ablation_correct = None
+
+        if num_heads > 0:
+            ablation_text = generate_cot_with_optional_ablation(
+                model,
+                cot_prompt,
+                ablated_heads=selected_heads_list,
+                max_cot_reasoning_tokens=max_cot_reasoning_tokens,
+                max_answer_tokens=max_answer_tokens,
+                print_tokens=print_tokens,
+                task=task,
+            )
+
+            ablation_extracted = task.extract(ablation_text)
+            ablation_correct = task.answers_equal(ablation_extracted, true_ans)
+
+        # ------------------------------
+        # Random-head ablation
+        # ------------------------------
+        random_text = None
+        random_extracted = None
+        random_correct = None
+        random_heads_list = None
+
+        if num_heads > 0:
+            random_heads_list = sample_random_heads_same_count_for_example(
+                model,
+                num_heads,
+                seed=random_seed + count
+            )
+
+            random_text = generate_cot_with_optional_ablation(
+                model,
+                cot_prompt,
+                ablated_heads=random_heads_list,
+                max_cot_reasoning_tokens=max_cot_reasoning_tokens,
+                max_answer_tokens=max_answer_tokens,
+                print_tokens=print_tokens,
+                task=task,
+            )
+
+            random_extracted = task.extract(random_text)
+            random_correct = task.answers_equal(random_extracted, true_ans)
 
         results.append({
             "example_id": example_id,
-            "normal_correct": numeric_equal(extract_last_number(normal_text), true_ans),
-            "ablation_correct": numeric_equal(extract_last_number(ablation_text), true_ans) if ablation_text else False,
-            "random_correct": numeric_equal(extract_last_number(random_text), true_ans) if random_text else False,
+            "Type": q_type,
+            "CotPrompt": cot_prompt,
+            "true_answer": true_ans,
+            "selected_heads": selected_heads_list,
+            "random_heads": random_heads_list,
+            "num_heads_ablated": num_heads,
+
+            "normal_text": normal_text,
+            "normal_extracted": normal_extracted,
+            "normal_correct": normal_correct,
+
+            "ablation_text": ablation_text,
+            "ablation_extracted": ablation_extracted,
+            "ablation_correct": ablation_correct,
+
+            "random_text": random_text,
+            "random_extracted": random_extracted,
+            "random_correct": random_correct,
+
+            "correct": ablation_correct if ablation_correct is not None else False
         })
+
+        count += 1
+        pbar.update(1)
+
+        if verbose:
+            print("=" * 80)
+            print("example_id:", example_id)
+            print("prompt:", repr(cot_prompt))
+            print("true:", true_ans)
+            print("normal:", repr(normal_text), normal_extracted, normal_correct)
+            print("ablated:", repr(ablation_text), ablation_extracted, ablation_correct)
+            print("random:", repr(random_text), random_extracted, random_correct)
+
+    pbar.close()
     return pd.DataFrame(results)
+
+def load_heads_from_experiment(file_path):
+    """
+    JSON dosyasındaki selected_heads listesini şu formata dönüştürür:
+
+    [
+        {
+            "example_id": "...",
+            "selected_heads": [
+                {"layer": 3, "head": 5},
+                {"layer": 7, "head": 2},
+                ...
+            ]
+        },
+        ...
+    ]
+
+    Beklenen JSON yapısı:
+        item["patching_results"]["final_multi_head"]["selected_heads"]
+
+    Eğer JSON dosyası bozuk/kesikse regex fallback ile kurtarmaya çalışır.
+    """
+
+    heads_by_example_id = {}
+
+    if not os.path.exists(file_path):
+        print(f"❌ Dosya bulunamadı: {file_path}")
+        return []
+
+    # ------------------------------------------------------------
+    # Normal JSON okuma
+    # ------------------------------------------------------------
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        for item in data:
+            eid = item.get("example_id")
+
+            if eid is None:
+                continue
+
+            selected = (
+                item.get("patching_results", {})
+                    .get("final_multi_head", {})
+                    .get("selected_heads", [])
+            )
+
+            heads = []
+
+            for h in selected:
+                if h is None:
+                    continue
+
+                if "layer" in h and "head" in h:
+                    heads.append({
+                        "layer": int(h["layer"]),
+                        "head": int(h["head"])
+                    })
+
+            heads_by_example_id[str(eid)] = heads
+
+    # ------------------------------------------------------------
+    # Regex fallback
+    # ------------------------------------------------------------
+    except Exception as e:
+        print(f"⚠️ JSON normal okunamadı, regex fallback deneniyor: {file_path}")
+        print(f"Hata: {e}")
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        blocks = content.split('"example_id":')[1:]
+
+        for block in blocks:
+            eid_match = re.search(r'\s*"([^"]+)"', block)
+
+            if not eid_match:
+                continue
+
+            eid = eid_match.group(1)
+
+            heads = []
+
+            selected_block = block.split('"selected_heads":')
+
+            if len(selected_block) > 1:
+                heads_part = selected_block[1].split("]")[0]
+
+                layer_matches = re.findall(r'"layer":\s*(\d+)', heads_part)
+                head_matches = re.findall(r'"head":\s*(\d+)', heads_part)
+
+                for layer, head in zip(layer_matches, head_matches):
+                    heads.append({
+                        "layer": int(layer),
+                        "head": int(head)
+                    })
+
+            heads_by_example_id[str(eid)] = heads
+
+    return [
+        {
+            "example_id": eid,
+            "selected_heads": heads
+        }
+        for eid, heads in heads_by_example_id.items()
+    ]

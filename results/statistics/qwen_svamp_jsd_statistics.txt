@@ -1,0 +1,95 @@
+loaded: normal=32  cross=32  random=32
+
+==============================================================================
+0. REPLICATION CHECK (offline head selection vs stored selection, k=3)
+==============================================================================
+  exact match: 32/32 examples
+  -> offline re-analysis reproduces the stored selection exactly
+
+==============================================================================
+1. BOOTSTRAP CONFIDENCE INTERVALS (BCa, B=10000, 95%)
+==============================================================================
+
+  [normal patching]  n=32
+    Final JSD (lower = better)       0.2415 [0.1728, 0.3168]   (sd=0.2103)
+    Logit increase                   1.3029 [0.5586, 2.0732]   (sd=2.2177)
+    Probability increase             0.2506 [0.1541, 0.3483]   (sd=0.2863)
+
+  [cross patching]  n=32
+    Final JSD (lower = better)       0.2594 [0.1933, 0.3251]   (sd=0.1915)
+    Logit increase                   1.1300 [0.6088, 1.6366]   (sd=1.5121)
+    Probability increase             0.2075 [0.1265, 0.2973]   (sd=0.2479)
+
+  [random patching]  n=32
+    Final JSD (lower = better)       0.4018 [0.3343, 0.4609]   (sd=0.1878)
+    Logit increase                   1.0441 [-0.2161, 2.4349]   (sd=3.8606)
+    Probability increase             -0.0025 [-0.0694, 0.0532]   (sd=0.1799)
+
+  [unpatched baseline]  No-CoT vs CoT divergence
+    Baseline JSD                     0.3847 [0.3295, 0.4354]   (sd=0.1549)
+
+==============================================================================
+2. PAIRED COMPARISONS (same examples, Wilcoxon signed-rank)
+==============================================================================
+
+  normal vs random   (n=32)
+    mean A = 0.2415   mean B = 0.4018
+    difference (A-B) = -0.1603  95% CI [-0.2261, -0.0887]
+    Wilcoxon W = 54.0   p = <1e-4   p_holm = <1e-4
+    rank-biserial r = -0.795   examples where A has lower JSD: 27/32
+
+  normal vs unpatched baseline   (n=32)
+    mean A = 0.2415   mean B = 0.3847
+    difference (A-B) = -0.1432  95% CI [-0.2018, -0.0773]
+    Wilcoxon W = 67.0   p = <1e-4   p_holm = 0.0002716
+    rank-biserial r = -0.746   examples where A has lower JSD: 27/32
+
+  normal vs cross   (n=32)
+    mean A = 0.2415   mean B = 0.2594
+    difference (A-B) = -0.0179  95% CI [-0.0814, +0.0429]
+    Wilcoxon W = 255.0   p = 0.8754   p_holm = 0.8754
+    rank-biserial r = -0.034   examples where A has lower JSD: 13/32
+
+  cross vs random   (n=32)
+    mean A = 0.2594   mean B = 0.4018
+    difference (A-B) = -0.1424  95% CI [-0.2093, -0.0866]
+    Wilcoxon W = 68.0   p = <1e-4   p_holm = 0.0002716
+    rank-biserial r = -0.742   examples where A has lower JSD: 24/32
+
+==============================================================================
+3. HEAD-SELECTION SENSITIVITY (k-sweep, offline)
+==============================================================================
+  Note: recovery-vs-k needs one forward pass per (example, k) on GPU.
+  What is computable offline is the selected head SET and its stability.
+
+      k   mean heads   min   max   Jaccard vs k=3
+      1         4.41     1     8            0.369
+      3        12.16     7    22            1.000
+      5        18.66    11    27            0.652
+     10        34.50    20    47            0.356
+
+==============================================================================
+4. MOST FREQUENTLY SELECTED HEADS (across examples, k=3)
+==============================================================================
+     layer.head   count    share
+       14.10         21   65.6%
+       22.7          16   50.0%
+       10.6          15   46.9%
+       14.7          15   46.9%
+       14.13         14   43.8%
+       14.5          13   40.6%
+       12.0          12   37.5%
+       16.8          11   34.4%
+       14.1          11   34.4%
+       13.3          11   34.4%
+       16.11         11   34.4%
+       13.12         10   31.2%
+       16.7          10   31.2%
+       14.8           8   25.0%
+       16.13          7   21.9%
+
+    distinct heads ever selected: 94
+
+==============================================================================
+DONE
+==============================================================================

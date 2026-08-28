@@ -116,14 +116,20 @@ def patching_pipeline(
             clean_logits, clean_cache = model.run_with_cache(clean_tokens)
 
             # Determine which clean logits to use for the metric
+            def _bind(factory, clean):
+                """Binds one metric factory, or every entry of a dict of them."""
+                if isinstance(factory, dict):
+                    return {name: f(clean) for name, f in factory.items()}
+                return factory(clean)
+
             if clean_reference_logits is not None:
                 # Use fixed reference (e.g., the last token of the full answer generated initially)
                 # clean_reference_logits is shaped [vocab_size]; we need to unsqueeze it to [1, 1, vocab_size]
                 clean_reference_logits_expanded = clean_reference_logits.unsqueeze(0).unsqueeze(0)
-                metric_function = metric(clean_reference_logits_expanded)
+                metric_function = _bind(metric, clean_reference_logits_expanded)
             else:
                 # Default behavior: use the current clean logits
-                metric_function = metric(clean_logits)  # metric_function(patched_logits) -> scalar
+                metric_function = _bind(metric, clean_logits)
 
             # Run the provided patching function
             patching_result = patching_function(
@@ -135,7 +141,9 @@ def patching_pipeline(
             )
 
             # Move result to CPU and store
-            if torch.is_tensor(patching_result):
+            if isinstance(patching_result, dict):
+                patching_result = {k: v.detach().cpu() for k, v in patching_result.items()}
+            elif torch.is_tensor(patching_result):
                 patching_result = patching_result.detach().cpu()
             patching_results.append(patching_result)
 
@@ -144,9 +152,11 @@ def patching_pipeline(
             if str(device).startswith("cuda"):
                 torch.cuda.empty_cache()
 
-    # Average over all pairs -> final importance map
-    avg_patching_result = torch.stack(patching_results, dim=0).mean(dim=0)
-    return avg_patching_result
+    # Average over all pairs -> final importance map (one per metric, if several)
+    if isinstance(patching_results[0], dict):
+        return {name: torch.stack([r[name] for r in patching_results], dim=0).mean(dim=0)
+                for name in patching_results[0]}
+    return torch.stack(patching_results, dim=0).mean(dim=0)
 
 
 def patching_pipeline_with_relative_metric(

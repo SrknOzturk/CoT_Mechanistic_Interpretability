@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ProntoQA generator: an external repository (github.com/asaparov/prontoqa),
+# cloned locally only to regenerate data/raw/prontoqa/. It ships ~40 MB of
+# zipped model outputs that do not belong in this repo's history. The data it
+# produces IS committed, so the experiments are reproducible without it.
+prontoqa-main/
+
+# Local scratch
+*.log
+.ipynb_checkpoints/
+.DS_Store

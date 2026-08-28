@@ -1,17 +1,22 @@
 # --- Core Deep Learning & Mechanistic Interpretability ---
-torch>=2.0.0
-transformer-lens>=1.15.0
-transformers>=4.40.0
+# transformer-lens is pinned to the 2.x line on purpose. TransformerLens 3.x
+# replaces HookedTransformer.from_pretrained with TransformerBridge and renames
+# hooks to follow HuggingFace module paths, which breaks every
+# "blocks.{i}.attn.hook_z" string in this repository.
+torch>=2.0.0,<3.0.0
+transformer-lens>=2.15.0,<3.0.0
+transformers>=4.40.0,<5.0.0
 einops>=0.7.0
 
 # --- Data Manipulation & Analysis ---
 pandas>=2.0.0
-numpy>=1.24.0
+numpy>=1.24.0,<2.0.0
+scipy>=1.10.0
 
 # --- Visualization & Progress ---
 matplotlib>=3.7.0
 tqdm>=4.65.0
 
-# --- NLP / POS Tagging / NER ---
+# --- NLP / token categorisation ---
 nltk>=3.8.0
 spacy>=3.7.0

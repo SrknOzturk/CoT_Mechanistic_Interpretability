@@ -22,6 +22,11 @@ import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 import nltk
 
+# answer parsing/comparison is task-specific and lives in src.tasks;
+# re-exported here so existing `from src.utils import ...` callers keep working
+from src.tasks import extract_last_number, get_task, numeric_equal
+from src.templates import get_template
+
 # ===========================================================================
 # 3. NLP Tools (Safe loading for SpaCy & NLTK)
 # ===========================================================================
@@ -81,16 +86,6 @@ def load_model(model_name="qwen2.5-0.5b", device="cuda"):
 # Data / Prompt / Answer Helpers
 # ===========================================================================
 
-def clean_equation_to_equals_format(equation: str) -> str:
-    """
-    Cleans an equation string, removes parentheses, normalizes spacing,
-    and appends an equals sign.
-    """
-    equation = str(equation).strip()
-    equation = equation.replace("(", "").replace(")", "")
-    equation = re.sub(r"\s+", " ", equation).strip()
-    return equation + " = "
-
 
 def get_example_id_from_row(row: pd.Series, idx=None) -> str:
     """Safely extracts the ID from a dataframe row."""
@@ -116,61 +111,46 @@ def get_type_from_row(row: pd.Series) -> Optional[str]:
     return None
 
 
-def make_nocot_prompt_from_row(row: pd.Series) -> str:
+def make_nocot_prompt_from_row(row: pd.Series, template=None, task=None) -> str:
     """
-    Constructs a No-CoT prompt. Appends 'The answer is ' if missing.
+    The corrupted side of the patching pair: the No-CoT prompt with the answer
+    trigger appended.
+
+    This must reproduce what run_patchings.py builds, or the ablation would be
+    scoring a different protocol than the patching experiment it verifies.
+    Prompt columns are template-namespaced, so the template decides which column
+    to read and which suffix to append.
     """
-    for col in ["PromptWithoutCot", "prompt_no_cot"]:
+    template = template or get_template()
+    task = task or get_task()
+
+    for col in (template.nocot_col, "PromptWithoutCot", "prompt_no_cot"):
         if col in row.index and pd.notna(row[col]):
             prompt = str(row[col])
-            if "The answer is " in prompt:
+            # endswith, not `in`: the 1-shot demonstration contains the trigger
+            # too, so an `in` test would skip appending it to the target
+            if prompt.endswith(task.answer_trigger):
                 return prompt
-            return prompt.rstrip() + " The answer is "
+            return prompt + template.corrupt_suffix
 
-    q = row["Question"] if "Question" in row.index else row["question"]
-    return f"{q} The answer is "
+    raise KeyError(
+        f"no No-CoT prompt column found (looked for {template.nocot_col!r}); "
+        f"re-run prepare_dataset.py"
+    )
 
 
-def make_cot_prompt_from_row(row: pd.Series) -> str:
-    """
-    Constructs a CoT prompt. Appends 'Let's think step by step.' if missing.
-    """
-    for col in ["PromptWithCot", "prompt_cot"]:
+def make_cot_prompt_from_row(row: pd.Series, template=None) -> str:
+    """The clean side of the patching pair."""
+    template = template or get_template()
+
+    for col in (template.cot_col, "PromptWithCot", "prompt_cot"):
         if col in row.index and pd.notna(row[col]):
             return str(row[col])
 
-    q = row["Question"] if "Question" in row.index else row["question"]
-    return f"{q} Let's think step by step."
-
-
-def make_direct_equation_prompt_from_row(row: pd.Series) -> Optional[str]:
-    """
-    Constructs a Direct Equation prompt.
-    Example: '76.0 - 25.0 = The answer is '
-    """
-    if "Equation" not in row or pd.isna(row["Equation"]):
-        return None
-
-    equation_str = clean_equation_to_equals_format(row["Equation"])
-    return equation_str + "The answer is "
-
-
-def extract_last_number(text: str) -> Optional[float]:
-    """Extracts the final numeric value from a generated text block."""
-    matches = re.findall(r"-?\d+(?:\.\d+)?", str(text))
-    if matches:
-        return float(matches[-1])
-    return None
-
-
-def numeric_equal(pred, gold, tol=1e-4) -> bool:
-    """Safely compares two numeric values with a tolerance buffer."""
-    if pred is None or gold is None:
-        return False
-    try:
-        return abs(float(pred) - float(gold)) < tol
-    except Exception:
-        return False
+    raise KeyError(
+        f"no CoT prompt column found (looked for {template.cot_col!r}); "
+        f"re-run prepare_dataset.py"
+    )
 
 
 def safe_accuracy(df_result: pd.DataFrame, column_name: str) -> float:
@@ -235,14 +215,31 @@ def _is_numeric_answer_token(token_str: str) -> bool:
     return all(ch in allowed_chars for ch in stripped)
 
 
+def _strip_bos(model, text: str) -> str:
+    """
+    Removes the leading BOS marker from a decoded sequence.
+
+    The original code sliced [13:], which is len("<|endoftext|>") -- Qwen's BOS
+    rendering. That length is tokenizer-specific: Llama renders BOS as
+    "<|begin_of_text|>" (17 characters), so a fixed slice would leave "ext|>"
+    glued to the front of the string and silently corrupt every downstream
+    comparison without raising an error.
+    """
+    tokenizer = getattr(model, "tokenizer", None)
+    bos = getattr(tokenizer, "bos_token", None)
+    if bos and text.startswith(bos):
+        return text[len(bos):]
+    return text
+
 # ===========================================================================
 # Old Standard Generation Blocks (Required by Patching)
 # ===========================================================================
-def generate_till_answer(model, prompt: str, max_new_tokens: int = 500):
+def generate_till_answer(model, prompt: str, max_new_tokens: int = 1024, task=None):
     """
     Generates text until the model produces a specific answer trigger and continues
     capturing the numerical result while handling multi-token digits.
     """
+    task = task or get_task()
     device = next(model.parameters()).device
     model.reset_hooks()
 
@@ -256,30 +253,30 @@ def generate_till_answer(model, prompt: str, max_new_tokens: int = 500):
             output_tokens = torch.cat([output_tokens, next_token.unsqueeze(0)], dim=1)
 
             current_text = model.to_string(output_tokens)[0]
-            if current_text.endswith("The answer is ") or current_text.endswith("The answer is -"):
+            if task.ends_reasoning(current_text):
                 break
 
-        answer_without_number = model.to_string(output_tokens)[0][13:]
-        non_problematic_tokens = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", ".", ",", "-"]
+        answer_without_number = _strip_bos(model, model.to_string(output_tokens)[0])
 
         while True:
             logits = model(output_tokens[:, -2048:])
             next_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
             token_str = model.to_string(next_token)[0]
 
-            if token_str[-1].isspace() or token_str not in non_problematic_tokens:
+            if not task.is_answer_continuation(token_str):
                 break
             output_tokens = torch.cat([output_tokens, next_token.unsqueeze(0)], dim=1)
 
-    final_text = model.to_string(output_tokens)[0][13:]
+    final_text = _strip_bos(model, model.to_string(output_tokens)[0])
     return final_text, answer_without_number
 
 
-def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int = 500):
+def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int = 1024, task=None):
     """
     Generates the full answer using a CoT prompt and returns the logits of the first 
     token immediately following 'The answer is '.
     """
+    task = task or get_task()
     device = next(model.parameters()).device
     model.reset_hooks()
 
@@ -294,21 +291,20 @@ def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int 
             output_tokens = torch.cat([output_tokens, next_token.unsqueeze(0)], dim=1)
 
             current_text = model.to_string(output_tokens)[0]
-            if current_text.endswith("The answer is ") or current_text.endswith("The answer is -"):
+            if task.ends_reasoning(current_text):
                 logits = model(output_tokens[:, -2048:])
                 answer_token_logits = logits[0, -1, :].clone()
                 next_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
                 output_tokens = torch.cat([output_tokens, next_token.unsqueeze(0)], dim=1)
                 break
 
-        non_problematic_tokens = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", ".", ",", "-"]
 
         while True:
             logits = model(output_tokens[:, -2048:])
             next_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
             token_str = model.to_string(next_token)[0]
 
-            if token_str[-1].isspace() or token_str not in non_problematic_tokens:
+            if not task.is_answer_continuation(token_str):
                 break
             output_tokens = torch.cat([output_tokens, next_token.unsqueeze(0)], dim=1)
 
@@ -323,7 +319,7 @@ def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int 
     if full_text.startswith(prompt_text):
         full_answer_text = full_text[len(prompt_text):]
     else:
-        full_answer_text = full_text[13:] if len(full_text) > 13 else full_text
+        full_answer_text = _strip_bos(model, full_text)
 
     return full_answer_text, answer_token_logits
 
@@ -480,3 +476,149 @@ def _merge_top_heads_for_pos_jsd(prev_entries, hm, clean_cache, nh, k):
     final_list.sort(key=lambda x: x["score"])
     
     return final_list[:k]
+
+import re
+import random
+import torch
+import pandas as pd
+from tqdm import tqdm
+from collections import defaultdict
+
+
+# ============================================================
+# 1. DATA / PROMPT / ANSWER HELPERS
+# ============================================================
+
+
+# ============================================================
+# 2. HEAD SELECTION / ABLATION HELPERS
+# ============================================================
+
+def build_heads_by_example_id_from_curated(curated_normal_results, selected_heads_key="selected_heads"):
+    """
+    curated_normal_results formatı:
+
+    [
+        {
+            "example_id": "...",
+            "selected_heads": [
+                {"layer": 3, "head": 5},
+                {"layer": 7, "head": 2},
+                ...
+            ]
+        },
+        ...
+    ]
+
+    Çıktı:
+        {
+            example_id: [(layer, head), ...]
+        }
+    """
+    heads_by_example_id = {}
+
+    for item in curated_normal_results:
+        example_id = str(item["example_id"])
+        selected_heads = item.get(selected_heads_key, [])
+
+        heads = []
+        for h in selected_heads:
+            if h is None:
+                continue
+
+            layer = int(h["layer"])
+            head = int(h["head"])
+            heads.append((layer, head))
+
+        heads_by_example_id[example_id] = heads
+
+    return heads_by_example_id
+
+
+def group_heads_by_layer(heads):
+    layer_dict = defaultdict(list)
+
+    for layer, head in heads:
+        layer_dict[int(layer)].append(int(head))
+
+    return layer_dict
+
+
+def make_zero_ablation_hooks(heads):
+    """
+    Verilen [(layer, head), ...] listesindeki attention head'lerin
+    hook_z aktivasyonlarını sıfırlar.
+
+    Ablate edilen şey:
+        blocks.{layer}.attn.hook_z içindeki ilgili head output'u.
+
+    z shape:
+        [batch, position, n_heads, d_head]
+
+    Yapılan işlem:
+        z[:, :, head, :] = 0.0
+    """
+    if not heads:
+        return []
+
+    layer_dict = group_heads_by_layer(heads)
+    hooks = []
+
+    for layer, head_list in layer_dict.items():
+        hook_name = f"blocks.{layer}.attn.hook_z"
+
+        def hook_fn(z, hook, head_list=head_list):
+            for h in head_list:
+                z[:, :, h, :] = 0.0
+            return z
+
+        hooks.append((hook_name, hook_fn))
+
+    return hooks
+
+
+def sample_random_heads_matched_layers_for_example(model, selected_heads_list, seed=42):
+    """
+    Direct Equation için layer-matched random control.
+
+    Selected heads hangi layer'larda kaç tane ise,
+    random heads de aynı layer'lardan aynı sayıda seçilir.
+    """
+    random.seed(seed)
+
+    n_heads = model.cfg.n_heads
+    layer_counts = defaultdict(int)
+
+    for layer, head in selected_heads_list:
+        layer_counts[int(layer)] += 1
+
+    random_heads = []
+
+    for layer, count in layer_counts.items():
+        available_heads = list(range(n_heads))
+        chosen = random.sample(available_heads, count)
+
+        for h in chosen:
+            random_heads.append((layer, h))
+
+    return random_heads
+
+
+def sample_random_heads_same_count_for_example(model, num_heads, seed=42):
+    """
+    No-CoT ve CoT için aynı sayıda random head control.
+    Layer matching yapmaz, bütün layer-head havuzundan seçer.
+    """
+    random.seed(seed)
+
+    n_layers = model.cfg.n_layers
+    n_heads = model.cfg.n_heads
+
+    all_heads = [(layer, head) for layer in range(n_layers) for head in range(n_heads)]
+
+    if num_heads > len(all_heads):
+        num_heads = len(all_heads)
+
+    return random.sample(all_heads, num_heads)
+
+
