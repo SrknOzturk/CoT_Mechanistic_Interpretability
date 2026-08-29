@@ -152,7 +152,7 @@ src/analysis.py    bootstrap CIs, paired tests, offline k-sweep
 src/gpu_planning.py worker-count and cost model
 
 prepare_dataset.py builds the curated tables and candidate pools
-main.py            shows exactly what the experiments will load
+notebooks/         inspect_datasets.ipynb -- what the experiments load, with outputs saved
 experiments/run_patchings.py    the patching driver
 experiments/run_ablations.py    the ablation driver
 experiments/report_statistics.py statistics report
@@ -171,8 +171,8 @@ either, so a new dataset is a registry entry rather than a new code path.
 | curated | `svamp_curated.json` (1000) | `prontoqa_curated.json` (200) |
 | **candidates** ← what runs | `svamp_candidates.json` (104) | `prontoqa_candidates.json` (100) |
 
-`svamp_curated_subset.json` (32) belongs to the *old* submission and is read by
-nothing; it is kept only so `results/Old results/` can be traced to its input.
+Anything else in `data/processed/` is an intermediate and is read by nothing;
+`notebooks/inspect_datasets.ipynb` labels each file with its role.
 
 Pools are deliberately larger than 100 because the pre-filter and the
 three-model intersection (D12) will shrink them.
@@ -270,6 +270,7 @@ model under any assumption.
 | Dual-metric scan | Bit-for-bit equivalent to two separate scans |
 | Ablation | Task-aware; hooks verified to wrap the whole trajectory; prompts byte-identical to patching |
 | Statistics | `results/statistics/qwen_svamp_jsd_statistics.txt` |
+| Dataset inspection | `notebooks/inspect_datasets.ipynb`, executed with outputs saved |
 | Cost model | `experiments/plan_compute.py` |
 
 ### Next
@@ -304,7 +305,7 @@ choice. `boolean_expressions`, `navigate`, `web_of_lies` and
 
 ```bash
 python prepare_dataset.py                    # build curated tables + candidate pools
-python main.py                               # show what the experiments will load
+jupyter lab notebooks/inspect_datasets.ipynb # inspect what the experiments load
 python experiments/plan_compute.py --n 100   # workers and GPU-hour estimate
 
 python experiments/run_patchings.py --model qwen2.5-0.5b --dataset svamp \

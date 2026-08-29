@@ -15,7 +15,9 @@ so the one asymmetry between them must be the chain-of-thought cue itself.
 from dataclasses import dataclass
 from typing import Callable, Dict
 
-from src.tasks import ANSWER_TRIGGER
+import pandas as pd
+
+from src.tasks import ANSWER_TRIGGER, get_task
 
 STEP_BY_STEP = "Let's think step by step."
 
@@ -144,3 +146,52 @@ def check_template(spec: TemplateSpec, target: Dict, demo: Dict) -> None:
             f"[{spec.key}] the chain-of-thought cue leaked into the No-CoT prompt, "
             f"which would erase the difference between the two conditions"
         )
+
+
+# ---------------------------------------------------------------------------
+# Building a prompt from a dataframe row
+#
+# Both sides of the patching pair are read through these, so the ablation and
+# the patching driver cannot drift apart in how they assemble prompts.
+# ---------------------------------------------------------------------------
+
+def make_nocot_prompt_from_row(row: pd.Series, template=None, task=None) -> str:
+    """
+    The corrupted side of the patching pair: the No-CoT prompt with the answer
+    trigger appended.
+
+    This must reproduce what run_patchings.py builds, or the ablation would be
+    scoring a different protocol than the patching experiment it verifies.
+    Prompt columns are template-namespaced, so the template decides which column
+    to read and which suffix to append.
+    """
+    template = template or get_template()
+    task = task or get_task()
+
+    for col in (template.nocot_col, "PromptWithoutCot", "prompt_no_cot"):
+        if col in row.index and pd.notna(row[col]):
+            prompt = str(row[col])
+            # endswith, not `in`: the 1-shot demonstration contains the trigger
+            # too, so an `in` test would skip appending it to the target
+            if prompt.endswith(task.answer_trigger):
+                return prompt
+            return prompt + template.corrupt_suffix
+
+    raise KeyError(
+        f"no No-CoT prompt column found (looked for {template.nocot_col!r}); "
+        f"re-run prepare_dataset.py"
+    )
+
+
+def make_cot_prompt_from_row(row: pd.Series, template=None) -> str:
+    """The clean side of the patching pair."""
+    template = template or get_template()
+
+    for col in (template.cot_col, "PromptWithCot", "prompt_cot"):
+        if col in row.index and pd.notna(row[col]):
+            return str(row[col])
+
+    raise KeyError(
+        f"no CoT prompt column found (looked for {template.cot_col!r}); "
+        f"re-run prepare_dataset.py"
+    )
