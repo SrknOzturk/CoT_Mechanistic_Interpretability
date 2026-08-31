@@ -857,6 +857,7 @@ def sequential_random_patching_margin(
     seed=42,
     task=None,
     template=None,
+    checkpoint_path=None,
 ):
     """
     Algorithm 4: Random Activation Patching (Margin Recovery Metric)
@@ -879,9 +880,14 @@ def sequential_random_patching_margin(
     n_layers = model.cfg.n_layers
     n_heads = model.cfg.n_heads
     d_head = model.cfg.d_head
+    done = _load_checkpoint(checkpoint_path)
 
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Random Control (Margin)"):
         example_id = row[id_column]
+        cached = done.get(str(example_id))
+        if cached is not None:
+            json_export_data.append(cached)
+            continue
         cot_prompt = row[template.cot_col]
         no_cot_prompt = row[template.nocot_col]
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
@@ -890,7 +896,9 @@ def sequential_random_patching_margin(
             full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
                 model, cot_prompt, task=task)
         except AnswerTriggerNotFound as exc:
-            json_export_data.append(skipped_record(example_id, str(exc)))
+            rec = skipped_record(example_id, str(exc))
+            json_export_data.append(rec)
+            _append_checkpoint(checkpoint_path, rec)
             tqdm.write(f"-> {example_id} | SKIPPED: {exc}")
             continue
 
@@ -988,6 +996,7 @@ def sequential_random_patching_margin(
             }
         }
         json_export_data.append(nested_json_record)
+        _append_checkpoint(checkpoint_path, nested_json_record)
         tqdm.write(f"-> RANDOM (Margin) ID {example_id} | Final Rec Score: {final_recovery_score:.4f}")
 
     if output_json_path:
@@ -1008,6 +1017,7 @@ def sequential_random_patching_jsd(
     seed=42,
     task=None,
     template=None,
+    checkpoint_path=None,
 ):
     """
     Algorithm 4: Random Activation Patching (JSD Metric)
@@ -1031,9 +1041,14 @@ def sequential_random_patching_jsd(
     n_layers = model.cfg.n_layers
     n_heads = model.cfg.n_heads
     d_head = model.cfg.d_head
+    done = _load_checkpoint(checkpoint_path)
 
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Random Control (JSD)"):
         example_id = row[id_column]
+        cached = done.get(str(example_id))
+        if cached is not None:
+            json_export_data.append(cached)
+            continue
         cot_prompt = row[template.cot_col]
         no_cot_prompt = row[template.nocot_col]
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
@@ -1042,7 +1057,9 @@ def sequential_random_patching_jsd(
             full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
                 model, cot_prompt, task=task)
         except AnswerTriggerNotFound as exc:
-            json_export_data.append(skipped_record(example_id, str(exc)))
+            rec = skipped_record(example_id, str(exc))
+            json_export_data.append(rec)
+            _append_checkpoint(checkpoint_path, rec)
             tqdm.write(f"-> {example_id} | SKIPPED: {exc}")
             continue
 
@@ -1142,6 +1159,7 @@ def sequential_random_patching_jsd(
             }
         }
         json_export_data.append(nested_json_record)
+        _append_checkpoint(checkpoint_path, nested_json_record)
         tqdm.write(f"-> RANDOM ID {example_id} | JSD Baseline: {jsd_base:.4f} | JSD Final: {final_jsd_topn:.4f}")
 
     if output_json_path:
@@ -1149,6 +1167,40 @@ def sequential_random_patching_jsd(
             json.dump(json_export_data, f, indent=4, ensure_ascii=False)
 
     return json_export_data
+
+def _load_checkpoint(path):
+    """
+    Reads a JSONL checkpoint into {example_id: line} and reports how many lines
+    were unreadable. A line can go bad only if a process was killed mid-write
+    (SIGKILL, OOM-killer, power loss); a caught exception always finishes its
+    checkpoint write before the process exits, so this is a safety net, not the
+    normal path.
+    """
+    done, bad = {}, 0
+    if path and os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    done[str(rec["example_id"])] = rec
+                except (json.JSONDecodeError, KeyError):
+                    bad += 1
+    if bad:
+        print(f"  [checkpoint] {path}: ignored {bad} unreadable line(s)")
+    return done
+
+
+def _append_checkpoint(path, record):
+    """Appends and flushes one line -- a crash right after this call loses nothing."""
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 # =============================================================================
 # Combined sequential patching: both metrics from one scan
@@ -1188,6 +1240,7 @@ def multi_head_patching_dual_metric(
     seed=42,
     task=None,
     template=None,
+    checkpoint_path=None,
 ):
     """
     One sequential scan of the CoT trace that scores margin and JSD together.
@@ -1228,9 +1281,15 @@ def multi_head_patching_dual_metric(
         output_paths = {name: f"{stem}_{name}.json" for name in METRICS}
 
     exports = {name: [] for name in METRICS}
+    done = _load_checkpoint(checkpoint_path)
 
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Sequential patching (margin+JSD)"):
         example_id = row[id_column]
+        cached = done.get(str(example_id))
+        if cached is not None:
+            for name in METRICS:
+                exports[name].append(cached[name])
+            continue
         cot_prompt = row[template.cot_col]
         no_cot_prompt_last_token = row[template.nocot_col] + template.corrupt_suffix
 
@@ -1243,8 +1302,10 @@ def multi_head_patching_dual_metric(
                 model, cot_prompt, task=task
             )
         except AnswerTriggerNotFound as exc:
+            skip = {name: skipped_record(example_id, str(exc)) for name in METRICS}
             for name in METRICS:
-                exports[name].append(skipped_record(example_id, str(exc)))
+                exports[name].append(skip[name])
+            _append_checkpoint(checkpoint_path, {"example_id": example_id, **skip})
             tqdm.write(f"-> {example_id} | SKIPPED: {exc}")
             continue
 
@@ -1389,6 +1450,10 @@ def multi_head_patching_dual_metric(
                 },
             })
 
+        _append_checkpoint(checkpoint_path, {
+            "example_id": example_id,
+            **{name: exports[name][-1] for name in METRICS},
+        })
         tqdm.write(f"-> {example_id} | steps {step} | "
                    f"margin {exports['margin'][-1]['metrics']['recovery_score']:.4f} | "
                    f"jsd {exports['jsd'][-1]['metrics']['final_jsd_score']:.4f}")
