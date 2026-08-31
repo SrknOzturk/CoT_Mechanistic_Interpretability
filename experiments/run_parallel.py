@@ -198,19 +198,44 @@ def _resolve_worker_count(args):
     return n
 
 
-def _pending_ids(all_ids, ckpt_glob):
-    done = set()
-    for path in glob.glob(ckpt_glob):
+def _read_checkpoints(ckpt_glob):
+    """Every checkpoint line ever written for a pattern, keyed by example_id."""
+    by_id = {}
+    for path in sorted(glob.glob(ckpt_glob)):
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    done.add(str(json.loads(line)["example_id"]))
+                    rec = json.loads(line)
+                    by_id[str(rec["example_id"])] = rec
                 except (json.JSONDecodeError, KeyError):
                     pass
+    return by_id
+
+
+def _pending_ids(all_ids, ckpt_glob):
+    done = _read_checkpoints(ckpt_glob)
     return [i for i in all_ids if str(i) not in done]
+
+
+def _is_skipped(record):
+    """
+    True if a checkpoint record represents a skipped example.
+
+    Handles both shapes checkpoints take: the flat one random_margin/
+    random_jsd write (skipped is a top-level key, absent entirely on a
+    success), and the one the dual-metric ("normal") scan writes, which
+    nests one sub-record per metric -- {"example_id":..., "margin": {...},
+    "jsd": {...}} -- so the flag has to be read from inside those.
+    """
+    if "skipped" in record:
+        return bool(record["skipped"])
+    for value in record.values():
+        if isinstance(value, dict) and "skipped" in value:
+            return bool(value["skipped"])
+    return False
 
 
 def _shard(ids, n_shards):
@@ -227,26 +252,22 @@ def _shard(ids, n_shards):
     return [s for s in shards if s]
 
 
-def _merge(ckpt_dir, base, out_dir, metrics=None):
+def _merge(ckpt_dir, base, out_dir, metrics=None, keep_ids=None):
     """
     Reads every checkpoint line ever written for this experiment across all
     attempts and workers, keeps the last write per example_id (defensive; the
     sharding design never lets the same id appear twice within one attempt),
     and writes the final results file(s) at the paths run_patchings.py and
     run_ablations.py expect.
+
+    keep_ids, when given, restricts the output to exactly those ids -- used to
+    trim away skipped examples and any unused reserve draws so the final file
+    holds exactly the target count of successfully-patched examples.
     """
     pattern = os.path.join(ckpt_dir, f"{base}.attempt*.worker*.jsonl")
-    by_id = {}
-    n_lines = 0
-    for path in sorted(glob.glob(pattern)):
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                rec = json.loads(line)
-                n_lines += 1
-                by_id[str(rec["example_id"])] = rec
+    by_id = _read_checkpoints(pattern)
+    if keep_ids is not None:
+        by_id = {k: v for k, v in by_id.items() if k in keep_ids}
 
     if metrics:
         out = {m: [] for m in metrics}
@@ -268,37 +289,29 @@ def _merge(ckpt_dir, base, out_dir, metrics=None):
     return records
 
 
-def run_experiment(name, args, all_ids, id_column, data_path, ref_path=None):
-    base = rp.run_id(args.model, args.dataset, name, args.template)
-    ckpt_dir = os.path.join(args.out_dir, "checkpoints")
-    os.makedirs(ckpt_dir, exist_ok=True)
+def _run_workers_until_processed(name, args, ids, id_column, data_path, ckpt_dir, base, ref_path):
+    """
+    Shards `ids` across workers and runs them, retrying with fewer workers on
+    OOM, until every id in `ids` has a checkpoint record. Does not look at
+    whether those records are accepted or skipped -- that is the caller's job.
+    """
     pattern = os.path.join(ckpt_dir, f"{base}.attempt*.worker*.jsonl")
-
-    if args.fresh:
-        removed = 0
-        for p in glob.glob(pattern):
-            os.remove(p)
-            removed += 1
-        if removed:
-            print(f"[{name}] --fresh: removed {removed} existing checkpoint file(s)")
-
     workers = _resolve_worker_count(args)
     attempt = 0
-    t0 = time.time()
 
     while True:
-        pending = _pending_ids(all_ids, pattern)
+        pending = _pending_ids(ids, pattern)
         if not pending:
-            break
+            return
 
         shards = _shard(pending, workers)
-        print(f"\n[{name}] attempt {attempt}: {len(pending)}/{len(all_ids)} examples "
+        print(f"\n[{name}] attempt {attempt}: {len(pending)}/{len(ids)} examples "
               f"pending, {len(shards)} worker(s)")
 
         if args.dry_run:
             for i, s in enumerate(shards):
                 print(f"    worker {i}: {len(s)} examples ({s[0]}..{s[-1]})")
-            return None
+            return
 
         ctx = mp.get_context("spawn")
         procs = []
@@ -338,13 +351,74 @@ def run_experiment(name, args, all_ids, id_column, data_path, ref_path=None):
             continue
 
         attempt += 1
-        # loop back: pending is recomputed and should now be empty
+        # loop back: pending is recomputed against the checkpoints just written
+
+
+def run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path, ref_path=None):
+    """
+    Processes `primary_ids` (the target count), then draws from `reserve_ids`
+    one batch at a time to replace any that never reach the answer trigger --
+    the same skip a base model can hit on any prompt, checked here rather than
+    left to run_patchings.py alone since only the orchestrator knows there is
+    a reserve to draw from. Stops as soon as `len(primary_ids)` examples are
+    accepted, or the reserve runs out.
+
+    Because acceptance depends only on (model, CoT prompt) -- identical across
+    normal/random_margin/random_jsd -- the same ids end up accepted for every
+    experiment of a given model, as long as they are all run with the same
+    --target-n/--n against the same candidate file.
+    """
+    target_n = len(primary_ids)
+    base = rp.run_id(args.model, args.dataset, name, args.template)
+    ckpt_dir = os.path.join(args.out_dir, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
+    pattern = os.path.join(ckpt_dir, f"{base}.attempt*.worker*.jsonl")
+
+    if args.fresh:
+        removed = 0
+        for p in glob.glob(pattern):
+            os.remove(p)
+            removed += 1
+        if removed:
+            print(f"[{name}] --fresh: removed {removed} existing checkpoint file(s)")
+
+    attempted = list(primary_ids)
+    reserve_pool = list(reserve_ids)
+    round_no = 0
+    t0 = time.time()
+    accepted = []
+
+    while True:
+        _run_workers_until_processed(name, args, attempted, id_column, data_path,
+                                     ckpt_dir, base, ref_path)
+        if args.dry_run:
+            return None
+
+        records = _read_checkpoints(pattern)
+        accepted = [i for i in attempted if not _is_skipped(records[str(i)])]
+        shortfall = target_n - len(accepted)
+        print(f"[{name}] round {round_no}: {len(accepted)}/{target_n} accepted "
+              f"({len(attempted) - len(accepted)} skipped across {len(attempted)} attempted)")
+
+        if shortfall <= 0:
+            break
+        if not reserve_pool:
+            print(f"[{name}] reserve exhausted -- stopping with {len(accepted)}/{target_n}")
+            break
+
+        pull = reserve_pool[:shortfall]
+        reserve_pool = reserve_pool[len(pull):]
+        attempted += pull
+        round_no += 1
+        print(f"[{name}] drawing {len(pull)} example(s) from reserve "
+              f"({len(reserve_pool)} left in reserve)")
 
     elapsed = time.time() - t0
-    print(f"[{name}] all {len(all_ids)} examples accounted for in {elapsed / 3600:.2f} GPU-process-hours "
-          f"(wall clock; overlapping workers already counted once each)")
-    print(f"[{name}] merging {len(glob.glob(pattern))} checkpoint file(s)...")
-    return _merge(ckpt_dir, base, args.out_dir, metrics=rp.MULTI_OUTPUT.get(name))
+    print(f"[{name}] finished in {elapsed / 3600:.2f} GPU-process-hours (wall clock; "
+          f"overlapping workers already counted once each)")
+    print(f"[{name}] merging to exactly the {len(accepted)} accepted example(s)...")
+    return _merge(ckpt_dir, base, args.out_dir, metrics=rp.MULTI_OUTPUT.get(name),
+                 keep_ids=set(accepted))
 
 
 def main():
@@ -360,7 +434,11 @@ def main():
                     choices=sorted(rp.EXPERIMENTS), metavar="EXP",
                     help=f"any of: {', '.join(sorted(rp.EXPERIMENTS))} "
                          f"(default order: {' '.join(rp.DEFAULT_ORDER)})")
-    ap.add_argument("--n", type=int, default=None, help="limit to the first N candidates")
+    ap.add_argument("--target-n", type=int, default=64,
+                    help="successfully-patched examples to collect (default: 64)")
+    ap.add_argument("--n", type=int, default=None,
+                    help="limit the candidate pool to the first N rows before splitting into "
+                         "--target-n primary + reserve (default: use the whole file)")
     ap.add_argument("--ctx", type=int, default=2048)
     ap.add_argument("--heads-per-pos", type=int, default=3)
     ap.add_argument("--max-steps", type=int, default=1024)
@@ -402,7 +480,14 @@ def main():
         sys.exit(1)
 
     all_ids = [str(x) for x in df[id_column].tolist()]
+    if args.target_n > len(all_ids):
+        print(f"[ERROR] --target-n {args.target_n} exceeds the candidate pool size "
+              f"({len(all_ids)}); lower --target-n or widen the pool (drop --n, or "
+              f"raise the per-group sample count in prepare_dataset.py)")
+        sys.exit(1)
+    primary_ids, reserve_ids = all_ids[:args.target_n], all_ids[args.target_n:]
     print(f"Loaded {len(all_ids)} candidates from {rp.DATASETS[args.dataset]} "
+          f"({len(primary_ids)} primary + {len(reserve_ids)} reserve) "
           f"(model={args.model}, task={task.key}, template={template.key})")
 
     for name in args.experiments:
@@ -418,7 +503,7 @@ def main():
         else:
             ref_path = None
 
-        run_experiment(name, args, all_ids, id_column, data_path, ref_path=ref_path)
+        run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path, ref_path=ref_path)
 
     print("\nAll requested experiments completed.")
 
