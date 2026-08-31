@@ -61,6 +61,7 @@ if os.environ.get("_RUN_PARALLEL_TEST_IMPORT"):
 import pandas as pd  # noqa: E402
 
 import run_patchings as rp  # noqa: E402
+import run_ablations  # noqa: E402
 from plan_compute import DATASETS as COST_TABLE  # noqa: E402  (seq_len per dataset)
 from src.gpu_planning import max_workers as gpu_max_workers  # noqa: E402
 from src.models import MODELS, get_model_spec  # noqa: E402
@@ -70,6 +71,24 @@ from src.templates import DEFAULT_TEMPLATE, TEMPLATES  # noqa: E402
 # A worker that dies from CUDA OOM exits with this code; anything else is a
 # real bug and stops the whole run rather than being silently retried.
 OOM_EXIT_CODE = 42
+
+
+def _resolve_loader(rp_module):
+    """
+    load_model, or a test-only stand-in.
+
+    The seam is read wherever a model actually gets loaded -- inside a worker
+    process and in the orchestrator's own ablation stage alike -- so a test
+    can substitute a scripted model in both places with one env var.
+    Production runs never set this.
+    """
+    loader = rp_module.load_model
+    override = os.environ.get("_RUN_PARALLEL_TEST_LOADER")
+    if override:
+        import importlib
+        mod_name, attr = override.split(":")
+        loader = getattr(importlib.import_module(mod_name), attr)
+    return loader
 
 
 # ===========================================================================
@@ -94,15 +113,7 @@ def _worker_main(cfg):
     from src.templates import get_template as _get_template
 
     try:
-        # test-only seam: lets the checkpointing/sharding/merge logic be
-        # verified with a scripted stand-in model, with no GPU and no
-        # transformer_lens import, while production runs never set this.
-        loader = _rp.load_model
-        override = os.environ.get("_RUN_PARALLEL_TEST_LOADER")
-        if override:
-            import importlib
-            mod_name, attr = override.split(":")
-            loader = getattr(importlib.import_module(mod_name), attr)
+        loader = _resolve_loader(_rp)
 
         # test-only seam: force exactly one simulated OOM per marker file, to
         # exercise the retry-with-fewer-workers path without a real GPU.
@@ -426,6 +437,58 @@ def run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path, r
                  keep_ids=set(accepted))
 
 
+def _run_ablation_stage(args, task, template, normal_result, data_path):
+    """
+    Runs No-CoT and CoT ablation right after "normal" produces accepted
+    examples, once per metric (margin, JSD), verifying the heads that metric
+    selected.
+
+    Takes normal_result -- the {"margin": [...], "jsd": [...]} that
+    run_experiment("normal", ...) already returned -- directly rather than
+    re-reading the merged JSON files, which also sidesteps the filename
+    convention entirely for this path (only the standalone
+    `python run_ablations.py` CLI needs to get that right).
+
+    Not process-parallel: ablation is a sequential per-example generation
+    loop, cheap enough per example that splitting it across workers hasn't
+    been worth the complexity so far.
+    """
+    accepted_ids = {str(h["example_id"]) for h in normal_result.get("margin", [])}
+    if not accepted_ids:
+        print("\n[ablation] skipped: 'normal' produced no accepted examples")
+        return
+
+    print("\n" + "=" * 60)
+    print("ABLATION  (verifying the heads 'normal' selected)")
+    print("=" * 60)
+
+    ablation_out_dir = os.path.join(args.out_dir, "ablation")
+    os.makedirs(ablation_out_dir, exist_ok=True)
+
+    sampled_df = pd.read_json(data_path)
+    print(f"Loading model {args.model} for ablation ...")
+    loader = _resolve_loader(rp)
+    model = loader(args.model, device=args.device)
+
+    base = rp.run_id(args.model, args.dataset, "normal", args.template)
+    summary = []
+    for metric, curated_heads in normal_result.items():
+        if not curated_heads:
+            print(f"\n[ablation] {metric}: no accepted examples, skipping")
+            continue
+        print(f"\n--- ablating heads selected by {metric} ---")
+        summary.extend(run_ablations.run_ablation_conditions(
+            model, sampled_df, task, template, curated_heads,
+            ablation_out_dir, stem=f"{base}__{metric}"))
+
+    if summary:
+        sdf = pd.DataFrame(summary)
+        summary_path = os.path.join(ablation_out_dir, f"{base}__ablation_summary.csv")
+        sdf.to_csv(summary_path, index=False)
+        print(f"\n[ablation] summary written to {summary_path}")
+        print(sdf.to_string(index=False))
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Process-parallel runner for run_patchings.py experiments",
@@ -458,6 +521,9 @@ def main():
     ap.add_argument("--worker-cap", type=int, default=8,
                     help="upper bound on auto-sized worker count (compute saturates before VRAM does)")
 
+    ap.add_argument("--no-ablation", dest="ablation", action="store_false", default=True,
+                    help="skip the automatic No-CoT/CoT ablation run that otherwise follows "
+                         "'normal' as soon as it has accepted examples")
     ap.add_argument("--fresh", action="store_true",
                     help="discard existing checkpoints for the requested experiments and start over")
     ap.add_argument("--dry-run", action="store_true",
@@ -524,7 +590,11 @@ def main():
         else:
             ref_path = None
 
-        run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path, ref_path=ref_path)
+        result = run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path,
+                                ref_path=ref_path)
+
+        if name == "normal" and args.ablation and result:
+            _run_ablation_stage(args, task, template, result, data_path)
 
     print("\nAll requested experiments completed.")
 

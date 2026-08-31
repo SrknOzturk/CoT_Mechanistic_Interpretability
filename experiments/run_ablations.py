@@ -44,16 +44,68 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 DATASETS = {k: t.dataset_file for k, t in TASKS.items()}
 
 # Ablation is driven by the primary (normal sequential) patching run.
-# The cross-patching run is only used for the Qwen semantic control.
 def default_results(model, dataset, template):
-    """Primary (normal sequential) runs for this model/dataset/template."""
-    stem = f'{model}__{dataset}__{template}__'
-    return [stem + 'normal_jsd.json', stem + 'normal_margin.json']
+    """
+    Primary (normal sequential) runs for this model/dataset/template.
+
+    Matches run_id()+MULTI_OUTPUT's naming exactly: "{model}__{dataset}__
+    {template}__normal__{metric}.json" -- the metric is its own "__"-separated
+    suffix, not concatenated onto "normal".
+    """
+    stem = f'{model}__{dataset}__{template}__normal'
+    return [stem + '__margin.json', stem + '__jsd.json']
 
 CONDITIONS = [
     ("NoCoT", run_nocot_ablation_using_curated_heads),
     ("CoT", run_cot_ablation_using_curated_heads),
 ]
+
+
+def run_ablation_conditions(model, sampled_df, task, template, curated_heads, out_dir, stem,
+                            max_examples=None):
+    """
+    Runs NoCoT + CoT ablation for one curated-heads source (one metric's
+    accepted examples from a patching run), restricted to exactly the
+    examples curated_heads has head selections for.
+
+    That restriction matters: sampled_df is the full candidate pool (primary
+    + reserve), while curated_heads only covers the accepted subset a
+    patching run actually selected heads for. Ablating an example with zero
+    selected heads isn't a null result, it's a different experiment (nothing
+    to ablate), and mixing it in dilutes the accuracy figures.
+    """
+    accepted_ids = {str(h["example_id"]) for h in curated_heads}
+    id_col = task.id_column
+    df = sampled_df[sampled_df[id_col].astype(str).isin(accepted_ids)].reset_index(drop=True)
+    if len(df) < len(accepted_ids):
+        print(f"  [WARNING] {len(accepted_ids) - len(df)} curated example_id(s) not found "
+              f"in the candidate pool; check --dataset/--target-n match the patching run")
+    print(f"  {len(df)} examples with curated heads (of {len(sampled_df)} in the candidate pool)")
+
+    summary = []
+    for name, runner in CONDITIONS:
+        result_df = runner(df, model, curated_heads, max_examples=max_examples,
+                           task=task, template=template)
+        out_csv = os.path.join(out_dir, f"{stem}__ablation_{name}.csv")
+        result_df.to_csv(out_csv, index=False)
+
+        usable = result_df[~result_df["skipped"]] if "skipped" in result_df.columns else result_df
+        n_skipped = len(result_df) - len(usable)
+        row = {
+            "source": stem,
+            "condition": name,
+            "normal_acc": safe_accuracy(usable, "normal_correct"),
+            "ablated_acc": safe_accuracy(usable, "ablation_correct"),
+            "random_acc": safe_accuracy(usable, "random_correct"),
+            "n": len(usable),
+            "skipped": n_skipped,
+        }
+        summary.append(row)
+        print(f"      normal {row['normal_acc']:.2f}%   "
+              f"ablated {row['ablated_acc']:.2f}%   "
+              f"random {row['random_acc']:.2f}%   "
+              f"(n={len(usable)}, {n_skipped} skipped)   -> {os.path.basename(out_csv)}")
+    return summary
 
 
 def main():
@@ -99,34 +151,9 @@ def main():
             continue
 
         stem = os.path.splitext(file_name)[0]
-        for i, (name, runner) in enumerate(CONDITIONS, start=1):
-            print(f"  [{i}/{len(CONDITIONS)}] {name} ablation ...")
-            df = runner(sampled_df, model, curated_heads,
-                        max_examples=args.max_examples,
-                        task=task, template=template)
-
-            out_csv = os.path.join(out_dir, f"{stem}__ablation_{name}.csv")
-            df.to_csv(out_csv, index=False)
-
-            # accuracy is computed over usable rows only; a row whose unablated
-            # run produced no answer says nothing about what ablation did to it
-            usable = df[~df["skipped"]] if "skipped" in df.columns else df
-            n_skipped = len(df) - len(usable)
-
-            row = {
-                "source": file_name,
-                "condition": name,
-                "normal_acc": safe_accuracy(usable, "normal_correct"),
-                "ablated_acc": safe_accuracy(usable, "ablation_correct"),
-                "random_acc": safe_accuracy(usable, "random_correct"),
-                "n": len(usable),
-                "skipped": n_skipped,
-            }
-            summary.append(row)
-            print(f"      normal {row['normal_acc']:.2f}%   "
-                  f"ablated {row['ablated_acc']:.2f}%   "
-                  f"random {row['random_acc']:.2f}%   "
-                  f"(n={len(usable)}, {n_skipped} skipped)   -> {os.path.basename(out_csv)}")
+        summary.extend(run_ablation_conditions(
+            model, sampled_df, task, template, curated_heads, out_dir, stem,
+            max_examples=args.max_examples))
 
     if summary:
         sdf = pd.DataFrame(summary)
