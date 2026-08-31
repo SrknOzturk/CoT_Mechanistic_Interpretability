@@ -37,13 +37,14 @@ the head-selection and POS-grouping choices, and documented compute cost.
 | D4 | Parallelism is **process-level**: N copies of one model, one example each | Batching examples would need left-padding, which moves the patch site off the true last token |
 | D5 | Matrix = 3 models × 2 datasets × 1 template | BBH deferred pending subtask selection |
 | D6 | Template = `Q: … A: Let's think step by step. … Q: … A: Let's think step by step.` | A new model is not guaranteed to produce CoT without an explicit cue |
-| D7 | **n = 100** per dataset | Roughly triples the submitted version's 32 |
+| D7 | **n = 64** per dataset (pools built at ~1.5x, 96, for pre-filter slack) | Cuts compute further while keeping the design's balance |
 | D8 | Experiments = **normal sequential patching + random control**. Cross-patching dropped | See §3 |
 | D9 | **Margin and JSD scored in one scan** | They read the same patched logits; two scans paid for every forward pass twice |
 | D10 | Ablation kept (No-CoT + CoT). **Equation condition dropped** | Patching is the contribution; ablation is verification |
 | D11 | Generation limits = 1024; the patching loop has **no fixed cap** — it runs the pre-filter's measured trace length | Guarantees no truncated trace without the runaway cost of a blind cap |
 | D12 | Examples whose trace never reaches the anchor are **skipped**; the kept set is the **intersection across all three models** | Skipping is model-dependent, and cross-model claims need paired comparison on common examples |
 | D13 | Statistics: bootstrap CIs, paired test vs random, k-sweep, POS ablation with matched control | First four cost ~0 GPU |
+| D14 | An example whose trace never reaches the answer trigger is **skipped, not crashed on** — recorded with `skipped=True` and a `skip_reason`, excluded from every statistic | A base model failing to produce a well-formed trace is an expected outcome, and losing the whole run's progress to one bad example was the alternative |
 
 ### Prompt structure
 
@@ -128,6 +129,25 @@ Cross-patching's donor draw and the random control's Gaussian vectors were both
 unseeded — neither control could be reproduced. Both now derive a deterministic
 per-example seed. `random.seed()` calls that mutated global RNG state replaced
 with local `Random` instances.
+
+### Skip handling (new)
+
+`generate_full_answer_and_get_logits` used to raise a bare `ValueError` when the
+trigger never appeared, crashing the whole run and losing every example already
+processed. It now raises `AnswerTriggerNotFound` (`src/tasks.py`), which the
+drivers catch:
+
+- `run_patchings.py` records a `skipped_record()` — same shape as a real record,
+  `metrics` left empty — and continues
+- `run_ablations.py` flags a row `skipped` when the unablated run never reached
+  the trigger, and excludes it from the accuracy computed in the summary
+- `src/analysis.py`'s `metric_vector` / `align` drop skipped rows automatically,
+  so nothing downstream needs to know skips exist
+- `skip_summary()` reports the count and reason per example; both drivers and
+  `report_statistics.py` print it
+
+Verified end to end with a scripted model that never emits the trigger: the run
+continues, the skip is recorded, and it does not reach `bootstrap_ci`.
 
 ### Data
 
@@ -214,15 +234,18 @@ VRAM, and should be replaced by a calibration measurement.
 
 | model | dataset | steps | GPU-h |
 |---|---|---|---|
-| Qwen2.5-0.5B | SVAMP | 55 | 36.5 |
-| Qwen2.5-0.5B | ProntoQA | 85 | 55.8 |
-| OLMo-2-1B | SVAMP | 55 | 43.2 |
-| OLMo-2-1B | ProntoQA | 85 | 65.9 |
-| Llama-3.2-1B | SVAMP | 55 | 80.4 |
-| Llama-3.2-1B | ProntoQA | 85 | 122.8 |
-| | | **TOTAL** | **404.6** |
+| Qwen2.5-0.5B | SVAMP | 55 | 23.4 |
+| Qwen2.5-0.5B | ProntoQA | 85 | 35.7 |
+| OLMo-2-1B | SVAMP | 55 | 27.6 |
+| OLMo-2-1B | ProntoQA | 85 | 42.2 |
+| Llama-3.2-1B | SVAMP | 55 | 51.5 |
+| Llama-3.2-1B | ProntoQA | 85 | 78.6 |
+| | | **TOTAL** | **~259** |
 
-**≈ 122 wall-clock hours ≈ 5.1 days** at 65% scaling efficiency.
+**≈ 78 wall-clock hours ≈ 3.3 days** at 65% scaling efficiency
+(`python experiments/plan_compute.py --n 64`).
+
+This does not yet subtract skipped examples — the pre-filter will lower it further by however many candidates never reach the anchor.
 
 ### What the optimisations bought
 

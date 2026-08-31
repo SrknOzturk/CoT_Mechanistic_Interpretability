@@ -24,7 +24,7 @@ import nltk
 
 # answer parsing/comparison is task-specific and lives in src.tasks;
 # re-exported here so existing `from src.utils import ...` callers keep working
-from src.tasks import extract_last_number, get_task, numeric_equal
+from src.tasks import AnswerTriggerNotFound, extract_last_number, get_task, numeric_equal
 # prompt construction is template logic, not model logic; re-exported here
 # so existing `from src.utils import make_*_prompt_from_row` keeps working
 from src.templates import (
@@ -273,10 +273,10 @@ def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int 
             output_tokens = torch.cat([output_tokens, next_token.unsqueeze(0)], dim=1)
 
     if answer_token_logits is None:
-        raise ValueError(
-            "Could not find 'The answer is ' in the generated text. "
-            "Make sure the prompt leads to a response containing 'The answer is '."
-        )
+        # the model never committed to an answer within the budget; the caller
+        # decides whether to skip this example or treat it as fatal
+        tail = model.to_string(output_tokens)[0][-120:]
+        raise AnswerTriggerNotFound("CoT prompt", max_new_tokens, tail)
 
     full_text = model.to_string(output_tokens)[0]
     prompt_text = model.to_string(tokens)[0]

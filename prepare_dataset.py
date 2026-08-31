@@ -41,13 +41,20 @@ PRONTOQA_RAW_DIR = os.path.join(RAW, "prontoqa")
 PRONTOQA_CURATED = os.path.join(PROCESSED, "prontoqa_curated.json")
 PRONTOQA_POOL = os.path.join(PROCESSED, "prontoqa_candidates.json")
 
-# SVAMP strata: 2 operation counts x 4 types = 8 groups
-SVAMP_PER_GROUP = 13
+# The experiments keep TARGET_N examples per dataset. The pools below are
+# larger on purpose: the pre-filter drops any example whose CoT trace never
+# reaches the answer anchor, and because that decision is model-dependent the
+# kept set is the intersection across all three models. 1.5x leaves room for
+# both without having to regenerate.
+TARGET_N = 64
+
+# SVAMP strata: 2 operation counts x 4 types = 8 groups -> 8 kept per group
+SVAMP_PER_GROUP = 12
 # ProntoQA strata: hop levels 2-5, 25 each -> 100 examples.
 # 1-hop is generated but excluded: a single deduction step gives the model
 # almost nothing to reason over, so its traces are too short to scan.
-PRONTOQA_HOPS = (2, 3, 4, 5)
-PRONTOQA_PER_GROUP = 25
+PRONTOQA_HOPS = (2, 3, 4, 5)          # 4 groups -> 16 kept per group
+PRONTOQA_PER_GROUP = 24
 
 
 def discover_prontoqa_files(directory):

@@ -28,6 +28,7 @@ from src.analysis import (  # noqa: E402
     holm_bonferroni,
     k_sweep,
     load_results,
+    skip_summary,
     metric_vector,
     paired_comparison,
     select_heads_for_k,
@@ -66,6 +67,16 @@ def main():
         return
 
     print(f"loaded: normal={len(normal)}  cross={len(cross)}  random={len(rand)}")
+
+    for label, results in [("normal", normal), ("cross", cross), ("random", rand)]:
+        if not results:
+            continue
+        s = skip_summary(results)
+        if s["skipped"]:
+            print(f"  [{label}] {s['skipped']}/{s['total']} examples skipped "
+                  f"(no answer trigger reached):")
+            for eid, reason in s["reasons"].items():
+                print(f"      {eid}: {reason}")
 
     # -----------------------------------------------------------------
     # 0. Replication check: does the offline selector reproduce k=3?

@@ -168,20 +168,6 @@
         "PromptWithoutCot__qa1shot":"Q: After eating a hearty meal they went to see the Buckingham palace. There, Rachel learned that 512 visitors came to the Buckingham palace that day. If there were 471 visitors the previous day and 808 visitors the day before that How many visited the Buckingham palace within the past 89 days? A: The answer is 1791.0. Q: The grasshopper, the frog and the mouse had a jumping contest. The grasshopper jumped 21 inches. The grasshopper jumped 25 inches farther than the frog and the mouse jumped 16 inches lesser than the frog. How much farther did the grasshopper jump than the mouse? A:"
     },
     {
-        "ID":"chal-627",
-        "Body":"Edward spent $ 16 to buy 92 books each book costing him the same amount of money. Now he has $ 6.",
-        "Question":"How much did Edward have before he spent his money?",
-        "Equation":"( 16.0 + 6.0 )",
-        "Answer":22,
-        "Type":"Addition",
-        "OperationCount":1,
-        "PromptWithoutExample":"Edward spent $ 16 to buy 92 books each book costing him the same amount of money. Now he has $ 6. How much did Edward have before he spent his money?",
-        "PromptWithCot__step_by_step":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Let's think step by step. Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: Edward spent $ 16 to buy 92 books each book costing him the same amount of money. Now he has $ 6. How much did Edward have before he spent his money? A: Let's think step by step.",
-        "PromptWithoutCot__step_by_step":"Q: During summer break 34044 kids from Lawrence county go to camp and the other 134867 kids stay home. An additional 424944 kids from outside the county attended the camp. How many kids in total attended the camp? A: The answer is 458988.0. Q: Edward spent $ 16 to buy 92 books each book costing him the same amount of money. Now he has $ 6. How much did Edward have before he spent his money? A:",
-        "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: Edward spent $ 16 to buy 92 books each book costing him the same amount of money. Now he has $ 6. How much did Edward have before he spent his money? A:",
-        "PromptWithoutCot__qa1shot":"Q: During summer break 34044 kids from Lawrence county go to camp and the other 134867 kids stay home. An additional 424944 kids from outside the county attended the camp. How many kids in total attended the camp? A: The answer is 458988.0. Q: Edward spent $ 16 to buy 92 books each book costing him the same amount of money. Now he has $ 6. How much did Edward have before he spent his money? A:"
-    },
-    {
         "ID":"chal-451",
         "Body":"He then went to see the oranges being harvested. He found out that they harvested 54 sacks of oranges.",
         "Question":"How many days did it take to harvest them if they harvested 18 sacks of oranges per day?",
@@ -348,20 +334,6 @@
         "PromptWithoutCot__step_by_step":"Q: The ring toss game at the carnival made 120 dollars in the first 20 days and 66 dollars in the remaining 16 days. How much did they make per day in the first 20 days at the carnival? A: The answer is 6.0. Q: Frank was reading through some books. Each book had 249 pages and it took Frank 3 days to finish each book. How many pages did he read per day? A:",
         "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: Frank was reading through some books. Each book had 249 pages and it took Frank 3 days to finish each book. How many pages did he read per day? A:",
         "PromptWithoutCot__qa1shot":"Q: The ring toss game at the carnival made 120 dollars in the first 20 days and 66 dollars in the remaining 16 days. How much did they make per day in the first 20 days at the carnival? A: The answer is 6.0. Q: Frank was reading through some books. Each book had 249 pages and it took Frank 3 days to finish each book. How many pages did he read per day? A:"
-    },
-    {
-        "ID":"chal-877",
-        "Body":"Rebecca wants to split a collection of marbles into groups of 4. Rebecca has 10 eggs and 20 marbles.",
-        "Question":"How many groups will be created?",
-        "Equation":"( 20.0 \/ 4.0 )",
-        "Answer":5,
-        "Type":"Common-Division",
-        "OperationCount":1,
-        "PromptWithoutExample":"Rebecca wants to split a collection of marbles into groups of 4. Rebecca has 10 eggs and 20 marbles. How many groups will be created?",
-        "PromptWithCot__step_by_step":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Let's think step by step. Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: Rebecca wants to split a collection of marbles into groups of 4. Rebecca has 10 eggs and 20 marbles. How many groups will be created? A: Let's think step by step.",
-        "PromptWithoutCot__step_by_step":"Q: Faye was placing some pencils equally into 2 rows. If she had 6 pencils How many pencils did she place in each row? A: The answer is 3.0. Q: Rebecca wants to split a collection of marbles into groups of 4. Rebecca has 10 eggs and 20 marbles. How many groups will be created? A:",
-        "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: Rebecca wants to split a collection of marbles into groups of 4. Rebecca has 10 eggs and 20 marbles. How many groups will be created? A:",
-        "PromptWithoutCot__qa1shot":"Q: Faye was placing some pencils equally into 2 rows. If she had 6 pencils How many pencils did she place in each row? A: The answer is 3.0. Q: Rebecca wants to split a collection of marbles into groups of 4. Rebecca has 10 eggs and 20 marbles. How many groups will be created? A:"
     },
     {
         "ID":"chal-76",
@@ -532,20 +504,6 @@
         "PromptWithoutCot__qa1shot":"Q: Adam could fit 10 action figures on each shelf in his room. His room has could hold 8 action figures. How many total shelves did his room have? A: The answer is 80.0. Q: He then went to see the oranges being harvested. He found out that they harvest 66 sacks per day. How many oranges do they harvest per day if each sack contains 28 oranges? A:"
     },
     {
-        "ID":"chal-108",
-        "Body":"There are 141 pots. Each pot has 71 flowers and 91 sticks in it.",
-        "Question":"How many flowers are there in all?",
-        "Equation":"( 141.0 * 71.0 )",
-        "Answer":10011,
-        "Type":"Multiplication",
-        "OperationCount":1,
-        "PromptWithoutExample":"There are 141 pots. Each pot has 71 flowers and 91 sticks in it. How many flowers are there in all?",
-        "PromptWithCot__step_by_step":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Let's think step by step. Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: There are 141 pots. Each pot has 71 flowers and 91 sticks in it. How many flowers are there in all? A: Let's think step by step.",
-        "PromptWithoutCot__step_by_step":"Q: He then went to see the oranges being harvested. He found out that they harvest 38 sacks per day and that each sack containes 42 oranges. How many sacks of oranges will they have after 49 days of harvest? A: The answer is 1862.0. Q: There are 141 pots. Each pot has 71 flowers and 91 sticks in it. How many flowers are there in all? A:",
-        "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: There are 141 pots. Each pot has 71 flowers and 91 sticks in it. How many flowers are there in all? A:",
-        "PromptWithoutCot__qa1shot":"Q: He then went to see the oranges being harvested. He found out that they harvest 38 sacks per day and that each sack containes 42 oranges. How many sacks of oranges will they have after 49 days of harvest? A: The answer is 1862.0. Q: There are 141 pots. Each pot has 71 flowers and 91 sticks in it. How many flowers are there in all? A:"
-    },
-    {
         "ID":"chal-163",
         "Body":"Paco had 40 sweet cookies and 25 salty cookies. He ate 28 salty cookies and 15 sweet cookies.",
         "Question":"How many more salty cookies than sweet cookies did he eat?",
@@ -712,20 +670,6 @@
         "PromptWithoutCot__step_by_step":"Q: Because of the decision Sofia asked the students to suggest specific types of food. If 269 students suggested adding bacon 330 suggested adding mashed potatoes to the menu and 76 suggested adding tomatoes How many more students suggested mashed potatoes than those that suggested bacon? A: The answer is 61.0. Q: A grocery store had 54 bottles of diet soda, 83 bottles of regular soda and 12 apples. How many more bottles of regular soda than diet soda did they have? A:",
         "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: A grocery store had 54 bottles of diet soda, 83 bottles of regular soda and 12 apples. How many more bottles of regular soda than diet soda did they have? A:",
         "PromptWithoutCot__qa1shot":"Q: Because of the decision Sofia asked the students to suggest specific types of food. If 269 students suggested adding bacon 330 suggested adding mashed potatoes to the menu and 76 suggested adding tomatoes How many more students suggested mashed potatoes than those that suggested bacon? A: The answer is 61.0. Q: A grocery store had 54 bottles of diet soda, 83 bottles of regular soda and 12 apples. How many more bottles of regular soda than diet soda did they have? A:"
-    },
-    {
-        "ID":"chal-711",
-        "Body":"Jack received a total of 9 emails in the day. If he received 7 emails in the morning and some more in the afternoon",
-        "Question":"How many emails did Jack receive in the afternoon?",
-        "Equation":"( 9.0 - 7.0 )",
-        "Answer":2,
-        "Type":"Subtraction",
-        "OperationCount":1,
-        "PromptWithoutExample":"Jack received a total of 9 emails in the day. If he received 7 emails in the morning and some more in the afternoon How many emails did Jack receive in the afternoon?",
-        "PromptWithCot__step_by_step":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Let's think step by step. Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: Jack received a total of 9 emails in the day. If he received 7 emails in the morning and some more in the afternoon How many emails did Jack receive in the afternoon? A: Let's think step by step.",
-        "PromptWithoutCot__step_by_step":"Q: A grocery store had 19 bottles of diet soda and 60 bottles of regular soda. How many more bottles of regular soda than diet soda did they have? A: The answer is 41.0. Q: Jack received a total of 9 emails in the day. If he received 7 emails in the morning and some more in the afternoon How many emails did Jack receive in the afternoon? A:",
-        "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: Jack received a total of 9 emails in the day. If he received 7 emails in the morning and some more in the afternoon How many emails did Jack receive in the afternoon? A:",
-        "PromptWithoutCot__qa1shot":"Q: A grocery store had 19 bottles of diet soda and 60 bottles of regular soda. How many more bottles of regular soda than diet soda did they have? A: The answer is 41.0. Q: Jack received a total of 9 emails in the day. If he received 7 emails in the morning and some more in the afternoon How many emails did Jack receive in the afternoon? A:"
     },
     {
         "ID":"chal-21",
@@ -896,20 +840,6 @@
         "PromptWithoutCot__qa1shot":"Q: Because of the decision Sofia asked the students to suggest specific types of food. If 218 students suggested adding mashed potatoes as well as bacon while 351 suggested adding only bacon to the menu How many students suggested adding bacon? A: The answer is 569.0. Q: Paco had 40 cookies. He ate 2 of them. Then he bought 37 more cookies How many cookies did Paco have left? A:"
     },
     {
-        "ID":"chal-588",
-        "Body":"Baker made 62 cakes. Then he made 149 more cakes. He sold 144 of them.",
-        "Question":"How many cakes would baker still have?",
-        "Equation":"( ( 62.0 - 144.0 ) + 149.0 )",
-        "Answer":67,
-        "Type":"Addition",
-        "OperationCount":2,
-        "PromptWithoutExample":"Baker made 62 cakes. Then he made 149 more cakes. He sold 144 of them. How many cakes would baker still have?",
-        "PromptWithCot__step_by_step":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Let's think step by step. Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: Baker made 62 cakes. Then he made 149 more cakes. He sold 144 of them. How many cakes would baker still have? A: Let's think step by step.",
-        "PromptWithoutCot__step_by_step":"Q: Paul got a box of some crayons for his birthday. By the end of the school year he only had 291 crayons left since he had either lost or given away 315 of them. How many crayons did he get for his birthday? A: The answer is 606.0. Q: Baker made 62 cakes. Then he made 149 more cakes. He sold 144 of them. How many cakes would baker still have? A:",
-        "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: Baker made 62 cakes. Then he made 149 more cakes. He sold 144 of them. How many cakes would baker still have? A:",
-        "PromptWithoutCot__qa1shot":"Q: Paul got a box of some crayons for his birthday. By the end of the school year he only had 291 crayons left since he had either lost or given away 315 of them. How many crayons did he get for his birthday? A: The answer is 606.0. Q: Baker made 62 cakes. Then he made 149 more cakes. He sold 144 of them. How many cakes would baker still have? A:"
-    },
-    {
         "ID":"chal-28",
         "Body":"Matthew gave equal numbers of crackers and cakes to his 28 friends. If he had 13 crackers and 15 cakes initially",
         "Question":"How many crackers and cakes did each person eat?",
@@ -1076,20 +1006,6 @@
         "PromptWithoutCot__step_by_step":"Q: An industrial machine can make 3 shirts per minute. It made 6 shirts in all. How many minutes was the machine working? A: The answer is 2.0. Q: An industrial machine made 13 shirts yesterday and 3 shirts today. It can make 8 shirts a minute. How many minutes did the machine work in all? A:",
         "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: An industrial machine made 13 shirts yesterday and 3 shirts today. It can make 8 shirts a minute. How many minutes did the machine work in all? A:",
         "PromptWithoutCot__qa1shot":"Q: An industrial machine can make 3 shirts per minute. It made 6 shirts in all. How many minutes was the machine working? A: The answer is 2.0. Q: An industrial machine made 13 shirts yesterday and 3 shirts today. It can make 8 shirts a minute. How many minutes did the machine work in all? A:"
-    },
-    {
-        "ID":"chal-476",
-        "Body":"There are 10 peaches distributed equally in some baskets. If each basket has 4 red peaches and 6 green peaches",
-        "Question":"How many baskets of peaches are there?",
-        "Equation":"( 10.0 \/ ( 4.0 + 6.0 ) )",
-        "Answer":1,
-        "Type":"Common-Division",
-        "OperationCount":2,
-        "PromptWithoutExample":"There are 10 peaches distributed equally in some baskets. If each basket has 4 red peaches and 6 green peaches How many baskets of peaches are there?",
-        "PromptWithCot__step_by_step":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Let's think step by step. Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: There are 10 peaches distributed equally in some baskets. If each basket has 4 red peaches and 6 green peaches How many baskets of peaches are there? A: Let's think step by step.",
-        "PromptWithoutCot__step_by_step":"Q: Lewis earns $ 2 every week during the harvest. If he earns a total of $ 178 How many weeks did the harvest last? A: The answer is 89.0. Q: There are 10 peaches distributed equally in some baskets. If each basket has 4 red peaches and 6 green peaches How many baskets of peaches are there? A:",
-        "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: There are 10 peaches distributed equally in some baskets. If each basket has 4 red peaches and 6 green peaches How many baskets of peaches are there? A:",
-        "PromptWithoutCot__qa1shot":"Q: Lewis earns $ 2 every week during the harvest. If he earns a total of $ 178 How many weeks did the harvest last? A: The answer is 89.0. Q: There are 10 peaches distributed equally in some baskets. If each basket has 4 red peaches and 6 green peaches How many baskets of peaches are there? A:"
     },
     {
         "ID":"chal-596",
@@ -1260,20 +1176,6 @@
         "PromptWithoutCot__qa1shot":"Q: Frank had some pieces of candy. If he put them into 26 bags with 33 pieces in each bag How many pieces of candy did he have? A: The answer is 858.0. Q: Faye was placing her pencils and crayons into 11 rows with 31 pencils and 27 crayons in each row. How many pencils and crayons does she have altogether? A:"
     },
     {
-        "ID":"chal-611",
-        "Body":"There are 11 baskets of peaches. Each basket has 10 red peaches and 18 green peaches.",
-        "Question":"How many peaches are in the baskets altogether?",
-        "Equation":"( ( 10.0 + 18.0 ) * 11.0 )",
-        "Answer":308,
-        "Type":"Multiplication",
-        "OperationCount":2,
-        "PromptWithoutExample":"There are 11 baskets of peaches. Each basket has 10 red peaches and 18 green peaches. How many peaches are in the baskets altogether?",
-        "PromptWithCot__step_by_step":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Let's think step by step. Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: There are 11 baskets of peaches. Each basket has 10 red peaches and 18 green peaches. How many peaches are in the baskets altogether? A: Let's think step by step.",
-        "PromptWithoutCot__step_by_step":"Q: He then went to see the oranges being harvested. He found out that they harvest 74 sacks per day and discard 71 of them. How many sacks of oranges will they have after 51 days of harvest? A: The answer is 153.0. Q: There are 11 baskets of peaches. Each basket has 10 red peaches and 18 green peaches. How many peaches are in the baskets altogether? A:",
-        "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: There are 11 baskets of peaches. Each basket has 10 red peaches and 18 green peaches. How many peaches are in the baskets altogether? A:",
-        "PromptWithoutCot__qa1shot":"Q: He then went to see the oranges being harvested. He found out that they harvest 74 sacks per day and discard 71 of them. How many sacks of oranges will they have after 51 days of harvest? A: The answer is 153.0. Q: There are 11 baskets of peaches. Each basket has 10 red peaches and 18 green peaches. How many peaches are in the baskets altogether? A:"
-    },
-    {
         "ID":"chal-193",
         "Body":"They decided to hold the party in their backyard. They have 4 sets of tables and each set has 3 chairs. If a total of 14 people will attend the party",
         "Question":"How many more chairs will they have to buy?",
@@ -1440,19 +1342,5 @@
         "PromptWithoutCot__step_by_step":"Q: For Gwen's birthday she received 5 dollars from her dad. Her mom gave her 7 more dollars. If she spent 4 dollars. How much more money did she receive from her mom than she did from her dad? A: The answer is 2.0. Q: Jack received 6 emails in the morning, 3 emails in the afternoon and some more in the evening. If he received a total of 10 emails in the day How many emails did Jack receive in the afternoon? A:",
         "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: Jack received 6 emails in the morning, 3 emails in the afternoon and some more in the evening. If he received a total of 10 emails in the day How many emails did Jack receive in the afternoon? A:",
         "PromptWithoutCot__qa1shot":"Q: For Gwen's birthday she received 5 dollars from her dad. Her mom gave her 7 more dollars. If she spent 4 dollars. How much more money did she receive from her mom than she did from her dad? A: The answer is 2.0. Q: Jack received 6 emails in the morning, 3 emails in the afternoon and some more in the evening. If he received a total of 10 emails in the day How many emails did Jack receive in the afternoon? A:"
-    },
-    {
-        "ID":"chal-133",
-        "Body":"22 children were riding on the bus. At the bus stop 40 children got on the bus while some got off the bus. Then there were 2 children altogether on the bus.",
-        "Question":"How many children got off the bus at the bus stop?",
-        "Equation":"( ( 22.0 + 40.0 ) - 2.0 )",
-        "Answer":60,
-        "Type":"Subtraction",
-        "OperationCount":2,
-        "PromptWithoutExample":"22 children were riding on the bus. At the bus stop 40 children got on the bus while some got off the bus. Then there were 2 children altogether on the bus. How many children got off the bus at the bus stop?",
-        "PromptWithCot__step_by_step":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Let's think step by step. Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: 22 children were riding on the bus. At the bus stop 40 children got on the bus while some got off the bus. Then there were 2 children altogether on the bus. How many children got off the bus at the bus stop? A: Let's think step by step.",
-        "PromptWithoutCot__step_by_step":"Q: There are 10 different books and 11 different movies in the ' crazy silly school ' series. If you read 13 of the books and watched 12 of the movies How many more books than movies have you read? A: The answer is 1.0. Q: 22 children were riding on the bus. At the bus stop 40 children got on the bus while some got off the bus. Then there were 2 children altogether on the bus. How many children got off the bus at the bus stop? A:",
-        "PromptWithCot__qa1shot":"Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now? A: Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. Then total = 5 + 6 = 11. The answer is 11. Q: 22 children were riding on the bus. At the bus stop 40 children got on the bus while some got off the bus. Then there were 2 children altogether on the bus. How many children got off the bus at the bus stop? A:",
-        "PromptWithoutCot__qa1shot":"Q: There are 10 different books and 11 different movies in the ' crazy silly school ' series. If you read 13 of the books and watched 12 of the movies How many more books than movies have you read? A: The answer is 1.0. Q: 22 children were riding on the bus. At the bus stop 40 children got on the bus while some got off the bus. Then there were 2 children altogether on the bus. How many children got off the bus at the bus stop? A:"
     }
 ]

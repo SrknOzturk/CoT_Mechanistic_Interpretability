@@ -22,6 +22,25 @@ from typing import Any, Callable, Dict, Optional, Sequence, Tuple
 ANSWER_TRIGGER = "The answer is "
 
 
+class AnswerTriggerNotFound(RuntimeError):
+    """
+    Raised when a model never emits the answer trigger within its token budget.
+
+    This is an expected outcome for a base model on a hard prompt, not a bug, so
+    it gets its own type: the drivers catch it, record the example as skipped and
+    carry on, while a genuine error still propagates.
+    """
+
+    def __init__(self, prompt_kind, budget, generated_tail=""):
+        self.prompt_kind = prompt_kind
+        self.budget = budget
+        self.generated_tail = generated_tail
+        super().__init__(
+            f"{prompt_kind}: answer trigger not reached within {budget} tokens"
+            + (f"; trace ended with {generated_tail!r}" if generated_tail else "")
+        )
+
+
 # ===========================================================================
 # Answer parsing
 # ===========================================================================

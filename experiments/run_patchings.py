@@ -39,7 +39,7 @@ from src.metrics import (
     make_jsd_metric,
     margin_recovery_ratio
 )
-from src.tasks import TASKS, get_task
+from src.tasks import TASKS, AnswerTriggerNotFound, get_task
 from src.templates import DEFAULT_TEMPLATE, TEMPLATES, get_template
 from src.patching import patch_attn_head_out_last_pos
 from src.patching_pipelines import patching_pipeline
@@ -886,7 +886,14 @@ def sequential_random_patching_margin(
         no_cot_prompt = row[template.nocot_col]
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
 
-        full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(model, cot_prompt, task=task)
+        try:
+            full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
+                model, cot_prompt, task=task)
+        except AnswerTriggerNotFound as exc:
+            json_export_data.append(skipped_record(example_id, str(exc)))
+            tqdm.write(f"-> {example_id} | SKIPPED: {exc}")
+            continue
+
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
         corrupted_tokens = model.to_tokens(no_cot_prompt_last_token)[:, -ctx:].to(device)
@@ -1031,7 +1038,14 @@ def sequential_random_patching_jsd(
         no_cot_prompt = row[template.nocot_col]
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
 
-        full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(model, cot_prompt, task=task)
+        try:
+            full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
+                model, cot_prompt, task=task)
+        except AnswerTriggerNotFound as exc:
+            json_export_data.append(skipped_record(example_id, str(exc)))
+            tqdm.write(f"-> {example_id} | SKIPPED: {exc}")
+            continue
+
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
         corrupted_tokens = model.to_tokens(no_cot_prompt_last_token)[:, -ctx:].to(device)
@@ -1140,6 +1154,28 @@ def sequential_random_patching_jsd(
 # Combined sequential patching: both metrics from one scan
 # =============================================================================
 
+def skipped_record(example_id, reason):
+    """
+    Placeholder for an example that could not be patched.
+
+    Keeps the same top-level shape as a real record so downstream code can read
+    the file without special-casing, but leaves `metrics` empty so a skipped
+    example cannot be mistaken for a measured one. `src/analysis.py` drops rows
+    with no metric value, so skips are excluded from statistics automatically.
+    """
+    return {
+        "example_id": example_id,
+        "skipped": True,
+        "skip_reason": reason,
+        "t_true_token_id": None,
+        "metrics": {},
+        "patching_results": {
+            "token_level": [],
+            "category_level": {},
+            "final_multi_head": {"num_heads_patched": 0, "selected_heads": []},
+        },
+    }
+
 def multi_head_patching_dual_metric(
     df,
     model,
@@ -1198,9 +1234,20 @@ def multi_head_patching_dual_metric(
         cot_prompt = row[template.cot_col]
         no_cot_prompt_last_token = row[template.nocot_col] + template.corrupt_suffix
 
-        full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-            model, cot_prompt, task=task
-        )
+        # An example is only patchable if the model actually commits to an answer:
+        # the patch site is the position right after the trigger, and the recovery
+        # target is the answer token there. No trigger means neither exists, so the
+        # example is recorded as skipped rather than analysed on a partial trace.
+        try:
+            full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
+                model, cot_prompt, task=task
+            )
+        except AnswerTriggerNotFound as exc:
+            for name in METRICS:
+                exports[name].append(skipped_record(example_id, str(exc)))
+            tqdm.write(f"-> {example_id} | SKIPPED: {exc}")
+            continue
+
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
         corrupted_tokens = model.to_tokens(no_cot_prompt_last_token)[:, -ctx:].to(device)
@@ -1320,6 +1367,8 @@ def multi_head_patching_dual_metric(
 
             exports[name].append({
                 "example_id": example_id,
+                "skipped": False,
+                "skip_reason": None,
                 "t_true_token_id": t_true,
                 "metrics": {
                     "no_cot_logit": no_cot_t_true_logit,
@@ -1343,6 +1392,16 @@ def multi_head_patching_dual_metric(
         tqdm.write(f"-> {example_id} | steps {step} | "
                    f"margin {exports['margin'][-1]['metrics']['recovery_score']:.4f} | "
                    f"jsd {exports['jsd'][-1]['metrics']['final_jsd_score']:.4f}")
+
+    any_metric = next(iter(METRICS))
+    n_skipped = sum(r["skipped"] for r in exports[any_metric])
+    total = len(exports[any_metric])
+    print(f"\n{total - n_skipped}/{total} examples patched, {n_skipped} skipped "
+          f"(no answer trigger within {max_generation_steps} tokens)")
+    if n_skipped:
+        for r in exports[any_metric]:
+            if r["skipped"]:
+                print(f"    {r['example_id']}: {r['skip_reason']}")
 
     for name, path in output_paths.items():
         if path:

@@ -213,6 +213,10 @@ def run_nocot_ablation_using_curated_heads(
             task=task,
         )
 
+        # If the unablated run never reached the trigger there is no baseline to
+        # ablate away, so the row is marked and excluded from accuracy rather than
+        # counted as a failure caused by the ablation.
+        skipped = task.answer_trigger not in (normal_text or "")
         normal_extracted = task.extract(normal_text)
         normal_correct = task.answers_equal(normal_extracted, true_ans)
 
@@ -266,6 +270,7 @@ def run_nocot_ablation_using_curated_heads(
         results.append({
             "example_id": example_id,
             "Type": q_type,
+            "skipped": skipped,
             "NoCotPrompt": nocot_prompt,
             "true_answer": true_ans,
             "selected_heads": selected_heads_list,
@@ -375,6 +380,10 @@ def run_cot_ablation_using_curated_heads(
             task=task,
         )
 
+        # If the unablated run never reached the trigger there is no baseline to
+        # ablate away, so the row is marked and excluded from accuracy rather than
+        # counted as a failure caused by the ablation.
+        skipped = task.answer_trigger not in (normal_text or "")
         normal_extracted = task.extract(normal_text)
         normal_correct = task.answers_equal(normal_extracted, true_ans)
 
@@ -430,6 +439,7 @@ def run_cot_ablation_using_curated_heads(
         results.append({
             "example_id": example_id,
             "Type": q_type,
+            "skipped": skipped,
             "CotPrompt": cot_prompt,
             "true_answer": true_ans,
             "selected_heads": selected_heads_list,

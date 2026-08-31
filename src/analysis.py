@@ -26,6 +26,17 @@ from scipy import stats
 # Loading
 # ===========================================================================
 
+def skip_summary(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """How many examples were skipped, and why."""
+    skipped = [r for r in results if r.get("skipped")]
+    return {
+        "total": len(results),
+        "usable": len(results) - len(skipped),
+        "skipped": len(skipped),
+        "reasons": {str(r["example_id"]): r.get("skip_reason") for r in skipped},
+    }
+
+
 def load_results(path: str, quiet: bool = False) -> List[Dict[str, Any]]:
     """
     Loads a patching results JSON. Falls back to a regex scrape if the file was
@@ -71,9 +82,16 @@ def _regex_recover(path: str) -> List[Dict[str, Any]]:
 
 
 def metric_vector(results: Sequence[Dict[str, Any]], key: str) -> Tuple[List[str], np.ndarray]:
-    """Extracts (example_ids, values) for one metric, preserving file order."""
+    """
+    Extracts (example_ids, values) for one metric, preserving file order.
+
+    Examples recorded as skipped carry an empty `metrics` dict, so they drop out
+    here and never reach a statistic.
+    """
     ids, vals = [], []
     for r in results:
+        if r.get("skipped"):
+            continue
         v = r.get("metrics", {}).get(key)
         if v is None:
             continue
@@ -87,10 +105,15 @@ def align(a: Sequence[Dict[str, Any]], b: Sequence[Dict[str, Any]],
     """
     Aligns two result sets on example_id and returns the common ids with their
     paired metric values. Order follows `a`.
+
+    An example skipped in either set is dropped from both, which is what keeps
+    the comparison paired.
     """
-    bmap = {str(r["example_id"]): r for r in b}
+    bmap = {str(r["example_id"]): r for r in b if not r.get("skipped")}
     ids, va, vb = [], [], []
     for r in a:
+        if r.get("skipped"):
+            continue
         eid = str(r["example_id"])
         if eid not in bmap:
             continue

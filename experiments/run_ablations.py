@@ -108,18 +108,25 @@ def main():
             out_csv = os.path.join(out_dir, f"{stem}__ablation_{name}.csv")
             df.to_csv(out_csv, index=False)
 
+            # accuracy is computed over usable rows only; a row whose unablated
+            # run produced no answer says nothing about what ablation did to it
+            usable = df[~df["skipped"]] if "skipped" in df.columns else df
+            n_skipped = len(df) - len(usable)
+
             row = {
                 "source": file_name,
                 "condition": name,
-                "normal_acc": safe_accuracy(df, "normal_correct"),
-                "ablated_acc": safe_accuracy(df, "ablation_correct"),
-                "random_acc": safe_accuracy(df, "random_correct"),
-                "n": len(df),
+                "normal_acc": safe_accuracy(usable, "normal_correct"),
+                "ablated_acc": safe_accuracy(usable, "ablation_correct"),
+                "random_acc": safe_accuracy(usable, "random_correct"),
+                "n": len(usable),
+                "skipped": n_skipped,
             }
             summary.append(row)
             print(f"      normal {row['normal_acc']:.2f}%   "
                   f"ablated {row['ablated_acc']:.2f}%   "
-                  f"random {row['random_acc']:.2f}%   -> {os.path.basename(out_csv)}")
+                  f"random {row['random_acc']:.2f}%   "
+                  f"(n={len(usable)}, {n_skipped} skipped)   -> {os.path.basename(out_csv)}")
 
     if summary:
         sdf = pd.DataFrame(summary)
