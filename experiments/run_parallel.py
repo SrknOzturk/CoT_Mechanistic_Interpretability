@@ -132,7 +132,12 @@ def _worker_main(cfg):
         if name in _rp.MULTI_OUTPUT:
             kwargs["output_paths"] = {m: None for m in _rp.MULTI_OUTPUT[name]}
             kwargs["heads_per_pos"] = cfg["heads_per_pos"]
-            kwargs["max_generation_steps"] = cfg["max_steps"]
+            if name in _rp.RANDOM_REFERENCE_MULTI:
+                # a dict of {"margin": path, "jsd": path}, unlike the plain
+                # string the legacy single-metric random controls take below
+                kwargs["reference_json_paths"] = cfg["reference_json_path"]
+            else:
+                kwargs["max_generation_steps"] = cfg["max_steps"]
         else:
             kwargs["output_json_path"] = None
             kwargs["max_generation_steps"] = cfg["max_steps"]
@@ -491,7 +496,23 @@ def main():
           f"(model={args.model}, task={task.key}, template={template.key})")
 
     for name in args.experiments:
-        if name in rp.RANDOM_REFERENCE:
+        if name in rp.RANDOM_REFERENCE_MULTI:
+            refs, missing_refs = {}, []
+            for metric, ref_spec in rp.RANDOM_REFERENCE_MULTI[name].items():
+                ref_exp, ref_metric = ref_spec.split("__")
+                path = os.path.join(
+                    args.out_dir, rp.run_id(args.model, args.dataset, ref_exp, args.template)
+                    + f"__{ref_metric}.json")
+                refs[metric] = path
+                if not os.path.exists(path):
+                    missing_refs.append(path)
+            if missing_refs:
+                print(f"\nSkipping {name}: reference run(s) missing "
+                      f"({', '.join(os.path.basename(p) for p in missing_refs)}). "
+                      f"Run the experiment that produces them first.")
+                continue
+            ref_path = refs
+        elif name in rp.RANDOM_REFERENCE:
             ref_exp, ref_metric = rp.RANDOM_REFERENCE[name].split("__")
             ref_path = os.path.join(
                 args.out_dir, rp.run_id(args.model, args.dataset, ref_exp, args.template)

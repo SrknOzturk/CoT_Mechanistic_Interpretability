@@ -1228,6 +1228,212 @@ def skipped_record(example_id, reason):
         },
     }
 
+def sequential_random_patching_dual_metric(
+    df,
+    model,
+    id_column="ID",
+    ctx=1024,
+    heads_per_pos=3,
+    reference_json_paths=None,
+    output_json_path=None,
+    output_paths=None,
+    seed=42,
+    task=None,
+    template=None,
+    checkpoint_path=None,
+):
+    """
+    Random-Gaussian control, scoring margin and JSD from one sweep.
+
+    output_json_path is accepted (and ignored) only so this function's kwargs
+    stay compatible with the ones every EXPERIMENTS entry is called with; use
+    output_paths ({"margin": path, "jsd": path}) to actually write results.
+
+    The two single-metric random controls draw their noise from a generator
+    seeded only by (seed, example_id) -- never by which metric is being
+    scored -- so sequential_random_patching_margin and
+    sequential_random_patching_jsd inject byte-identical vectors into
+    byte-identical positions and pay for the same 336 forward passes twice
+    for no reason, exactly the redundancy multi_head_patching_dual_metric
+    already removed on the "normal" side. This is that same fix applied here.
+
+    reference_json_paths / output_paths are {"margin": path, "jsd": path},
+    since head selection still differs by metric (margin: highest score
+    wins; JSD: lowest, being a divergence) and each reads its own upstream
+    normal-run file for how many heads to patch.
+    """
+    task = task or get_task()
+    template = template or get_template()
+    device = next(model.parameters()).device
+
+    def better_margin(a, b):
+        return a > b
+
+    def better_jsd(a, b):
+        return a < b
+
+    METRICS = {
+        "margin": dict(better=better_margin, score_key="recovery_score", reverse=True),
+        "jsd": dict(better=better_jsd, score_key="final_jsd_score", reverse=False),
+    }
+
+    reference_heads_maps = {}
+    for name, path in (reference_json_paths or {}).items():
+        with open(path, "r", encoding="utf-8") as f:
+            ref_data = json.load(f)
+        reference_heads_maps[name] = {
+            item["example_id"]: item["patching_results"]["final_multi_head"]["num_heads_patched"]
+            for item in ref_data if "example_id" in item
+        }
+
+    n_layers = model.cfg.n_layers
+    n_heads = model.cfg.n_heads
+    d_head = model.cfg.d_head
+    done = _load_checkpoint(checkpoint_path)
+
+    exports = {name: [] for name in METRICS}
+    jsd_metric_factory = make_jsd_metric
+
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="Random Control (margin+JSD)"):
+        example_id = row[id_column]
+        cached = done.get(str(example_id))
+        if cached is not None:
+            for name in METRICS:
+                exports[name].append(cached[name])
+            continue
+
+        cot_prompt = row[template.cot_col]
+        no_cot_prompt_last_token = row[template.nocot_col] + template.corrupt_suffix
+
+        try:
+            full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
+                model, cot_prompt, task=task)
+        except AnswerTriggerNotFound as exc:
+            skip = {name: skipped_record(example_id, str(exc)) for name in METRICS}
+            for name in METRICS:
+                exports[name].append(skip[name])
+            _append_checkpoint(checkpoint_path, {"example_id": example_id, **skip})
+            tqdm.write(f"-> {example_id} | SKIPPED: {exc}")
+            continue
+
+        t_true = int(clean_reference_logits.argmax(dim=-1).item())
+
+        corrupted_tokens = model.to_tokens(no_cot_prompt_last_token)[:, -ctx:].to(device)
+        with torch.no_grad():
+            no_cot_logits = model(corrupted_tokens)[0, -1, :]
+
+        no_cot_t_true_logit = no_cot_logits[t_true].item()
+        no_cot_t_true_prob = F.softmax(no_cot_logits, dim=-1)[t_true].item()
+        active_jsd = jsd_metric_factory(no_cot_logits)
+
+        # seeded per (seed, example) so the random control is reproducible
+        rand_gen = torch.Generator(device=device)
+        rand_gen.manual_seed((seed + zlib.crc32(str(example_id).encode())) % (2 ** 31 - 1))
+        r_rand = {name: [] for name in METRICS}
+        z_table = {}
+
+        for l in range(n_layers):
+            for h in range(n_heads):
+                z_rand = torch.randn(d_head, generator=rand_gen, device=device)
+                z_table[(l, h)] = z_rand
+
+                def rand_hook(value, hook, layer=l, head=h, vec=z_rand):
+                    v = value.clone()
+                    v[:, v.shape[1] - 1, head, :] = vec
+                    return v
+
+                with torch.no_grad():
+                    patched_logits_single = model.run_with_hooks(
+                        corrupted_tokens,
+                        fwd_hooks=[(f"blocks.{l}.attn.hook_z", rand_hook)],
+                        return_type="logits"
+                    )[0, -1, :]
+
+                margin_score = margin_recovery_ratio(
+                    clean_reference_logits, no_cot_logits, patched_logits_single).item()
+                jsd_score = active_jsd(clean_reference_logits)(patched_logits_single).item()
+                r_rand["margin"].append({"layer": l, "head": h, "score": margin_score})
+                r_rand["jsd"].append({"layer": l, "head": h, "score": jsd_score})
+
+        for name, cfg in METRICS.items():
+            r_rand[name].sort(key=lambda x: x["score"], reverse=cfg["reverse"])
+            n_heads_to_patch = reference_heads_maps.get(name, {}).get(example_id, heads_per_pos)
+            h_topn = r_rand[name][:n_heads_to_patch]
+
+            layer_to_specs = defaultdict(list)
+            for info in h_topn:
+                l, h = info["layer"], info["head"]
+                layer_to_specs[l].append({"head": h, "vec": z_table[(l, h)]})
+
+            def make_multi_hook(specs):
+                def hook_fn(value, hook):
+                    v = value.clone()
+                    last_pos = v.shape[1] - 1
+                    for spec in specs:
+                        v[:, last_pos, spec["head"], :] = spec["vec"].to(v.device, v.dtype)
+                    return v
+                return hook_fn
+
+            hooks = [(f"blocks.{layer}.attn.hook_z", make_multi_hook(specs))
+                     for layer, specs in layer_to_specs.items()]
+
+            with torch.no_grad():
+                patched_logits_topn = model.run_with_hooks(
+                    corrupted_tokens, fwd_hooks=hooks, return_type="logits")[0, -1, :]
+
+            patched_t_true_logit = patched_logits_topn[t_true].item()
+            patched_t_true_prob = F.softmax(patched_logits_topn, dim=-1)[t_true].item()
+
+            if name == "margin":
+                final_score = margin_recovery_ratio(
+                    clean_reference_logits, no_cot_logits, patched_logits_topn).item()
+            else:
+                final_score = active_jsd(clean_reference_logits)(patched_logits_topn).item()
+
+            selected_heads_info = [
+                {"layer": x["layer"], "head": x["head"], "pos_label": "RANDOM",
+                 "patch_score": float(x["score"])} for x in h_topn
+            ]
+
+            exports[name].append({
+                "example_id": example_id,
+                "skipped": False,
+                "skip_reason": None,
+                "t_true_token_id": t_true,
+                "metrics": {
+                    "no_cot_logit": no_cot_t_true_logit,
+                    "patched_logit": patched_t_true_logit,
+                    "logit_increase": patched_t_true_logit - no_cot_t_true_logit,
+                    "no_cot_prob": no_cot_t_true_prob,
+                    "patched_prob": patched_t_true_prob,
+                    "prob_increase": patched_t_true_prob - no_cot_t_true_prob,
+                    cfg["score_key"]: final_score,
+                },
+                "patching_results": {
+                    "token_level": [],
+                    "category_level": {},
+                    "final_multi_head": {
+                        "num_heads_patched": len(selected_heads_info),
+                        "selected_heads": selected_heads_info,
+                    },
+                },
+            })
+
+        _append_checkpoint(checkpoint_path, {
+            "example_id": example_id,
+            **{name: exports[name][-1] for name in METRICS},
+        })
+        tqdm.write(f"-> RANDOM {example_id} | margin {exports['margin'][-1]['metrics']['recovery_score']:.4f} "
+                   f"| jsd {exports['jsd'][-1]['metrics']['final_jsd_score']:.4f}")
+
+    for name, path in (output_paths or {}).items():
+        if path:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(exports[name], f, indent=4, ensure_ascii=False)
+
+    return exports
+
+
 def multi_head_patching_dual_metric(
     df,
     model,
@@ -1487,31 +1693,40 @@ DATASETS = {k: t.dataset_file for k, t in TASKS.items()}
 
 # The experiment set is the normal sequential scan plus its random control.
 #
-# "normal" scores margin and JSD from a single scan: the two metrics read the
-# same patched logits, so scanning twice would pay for every forward pass twice.
-# It writes one results file per metric, so downstream analysis is unchanged.
+# Both "normal" and "random" score margin and JSD from a single scan: the two
+# metrics read the same patched logits (same heads, same positions -- for
+# "random" even the same Gaussian draw, since it is seeded by example_id, not
+# by metric), so scanning twice would pay for every forward pass twice. Each
+# writes one results file per metric, so downstream analysis is unchanged.
 #
 # The single-metric variants are kept for reference and remain selectable, but
-# running both costs twice as much as "normal" for identical output.
+# running them both costs twice as much as the combined version for identical
+# output.
 EXPERIMENTS = {
     "normal": multi_head_patching_dual_metric,
     "normal_margin": multi_head_patching_with_margin_difference,
     "normal_jsd": multi_head_patching_with_jsd_metric,
+    "random": sequential_random_patching_dual_metric,
     "random_margin": sequential_random_patching_margin,
     "random_jsd": sequential_random_patching_jsd,
 }
 
 # experiments producing more than one results file
-MULTI_OUTPUT = {"normal": ("margin", "jsd")}
+MULTI_OUTPUT = {"normal": ("margin", "jsd"), "random": ("margin", "jsd")}
 
-# random controls read the head counts of their corresponding normal run
-# a random control reads the head count of the matching normal run
+# random controls read the head counts of their corresponding normal run.
+# "random" needs both of normal's outputs at once (it selects heads for each
+# metric independently, in the same pass); the legacy single-metric controls
+# each need only their own.
 RANDOM_REFERENCE = {
     "random_margin": "normal__margin",
     "random_jsd": "normal__jsd",
 }
+RANDOM_REFERENCE_MULTI = {
+    "random": {"margin": "normal__margin", "jsd": "normal__jsd"},
+}
 
-DEFAULT_ORDER = ["normal", "random_margin", "random_jsd"]
+DEFAULT_ORDER = ["normal", "random"]
 
 
 def run_id(model_name, dataset, experiment, template):
@@ -1582,7 +1797,24 @@ def main():
                 m: os.path.join(args.out_dir, f"{base}__{m}.json") for m in MULTI_OUTPUT[name]
             }
             kwargs["heads_per_pos"] = args.heads_per_pos
-            kwargs["max_generation_steps"] = args.max_steps
+
+            if name in RANDOM_REFERENCE_MULTI:
+                refs = {}
+                for metric, ref_spec in RANDOM_REFERENCE_MULTI[name].items():
+                    ref_exp, ref_metric = ref_spec.split("__")
+                    refs[metric] = os.path.join(
+                        args.out_dir,
+                        run_id(args.model, args.dataset, ref_exp, args.template) + f"__{ref_metric}.json")
+                missing_refs = [p for p in refs.values() if not os.path.exists(p)]
+                if missing_refs:
+                    print(f"Skipping {name}: reference run(s) missing "
+                          f"({', '.join(os.path.basename(p) for p in missing_refs)}). "
+                          f"Run the experiment that produces them first.")
+                    continue
+                kwargs["reference_json_paths"] = refs
+            else:
+                kwargs["max_generation_steps"] = args.max_steps
+
             print("" + "=" * 60)
             print(f"EXPERIMENT: {name}   ->   " +
                   ", ".join(os.path.basename(p) for p in kwargs["output_paths"].values()))
