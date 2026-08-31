@@ -61,7 +61,6 @@ if os.environ.get("_RUN_PARALLEL_TEST_IMPORT"):
 import pandas as pd  # noqa: E402
 
 import run_patchings as rp  # noqa: E402
-import run_ablations  # noqa: E402
 from plan_compute import DATASETS as COST_TABLE  # noqa: E402  (seq_len per dataset)
 from src.gpu_planning import max_workers as gpu_max_workers  # noqa: E402
 from src.models import MODELS, get_model_spec  # noqa: E402
@@ -305,6 +304,195 @@ def _merge(ckpt_dir, base, out_dir, metrics=None, keep_ids=None):
     return records
 
 
+def _ablation_worker_main(cfg):
+    """
+    Runs in a freshly spawned process. Loads its own model, restricts the
+    candidate dataframe to its shard, reloads curated_heads fresh from
+    cfg["curated_heads_path"] (a completed patching run's merged results
+    file), and runs one ablation condition (No-CoT or CoT) over the shard.
+
+    Same exit-code contract as _worker_main: 0 success, OOM_EXIT_CODE on a
+    CUDA OOM, 1 on anything else.
+    """
+    import sys as _sys
+    _sys.path.insert(0, cfg["repo_root"])
+    _sys.path.insert(0, cfg["experiments_dir"])
+
+    import pandas as _pd
+    import run_patchings as _rp
+    from src.ablation import (
+        load_heads_from_experiment as _load_heads,
+        run_cot_ablation_using_curated_heads as _run_cot,
+        run_nocot_ablation_using_curated_heads as _run_nocot,
+    )
+    from src.tasks import get_task as _get_task
+    from src.templates import get_template as _get_template
+
+    try:
+        loader = _resolve_loader(_rp)
+        model = loader(cfg["model"], device=cfg["device"])
+
+        full_df = _pd.read_json(cfg["data_path"])
+        id_col = cfg["id_column"]
+        shard_ids = set(cfg["shard_ids"])
+        shard_df = full_df[full_df[id_col].astype(str).isin(shard_ids)].copy()
+        order = {sid: i for i, sid in enumerate(cfg["shard_ids"])}
+        shard_df["_order"] = shard_df[id_col].astype(str).map(order)
+        shard_df = shard_df.sort_values("_order").drop(columns="_order").reset_index(drop=True)
+
+        curated_heads = _load_heads(cfg["curated_heads_path"])
+        task = _get_task(cfg["dataset"])
+        template = _get_template(cfg["template"])
+
+        runner = _run_nocot if cfg["condition"] == "NoCoT" else _run_cot
+        runner(shard_df, model, curated_heads, task=task, template=template,
+              checkpoint_path=cfg["checkpoint_path"])
+        _sys.exit(0)
+
+    except Exception as exc:  # noqa: BLE001 -- classify and report, don't swallow
+        import traceback
+        msg = str(exc).lower()
+        is_oom = (
+            type(exc).__name__ == "OutOfMemoryError"
+            or "out of memory" in msg
+            or "cuda oom" in msg
+        )
+        traceback.print_exc()
+        _sys.exit(OOM_EXIT_CODE if is_oom else 1)
+
+
+def _run_ablation_workers_until_processed(label, args, ids, id_column, data_path,
+                                          curated_heads_path, condition, ckpt_dir, base):
+    """
+    Ablation's counterpart to _run_workers_until_processed: same shard / spawn
+    / OOM-retry-with-fewer-workers shape, targeting _ablation_worker_main
+    instead. Kept as a separate function rather than a shared one so the
+    already-verified patching path stays untouched.
+    """
+    pattern = os.path.join(ckpt_dir, f"{base}.attempt*.worker*.jsonl")
+    workers = _resolve_worker_count(args)
+    attempt = 0
+
+    while True:
+        pending = _pending_ids(ids, pattern)
+        if not pending:
+            return
+
+        shards = _shard(pending, workers)
+        print(f"\n[{label}] attempt {attempt}: {len(pending)}/{len(ids)} examples "
+              f"pending, {len(shards)} worker(s)")
+
+        if args.dry_run:
+            for i, s in enumerate(shards):
+                print(f"    worker {i}: {len(s)} examples ({s[0]}..{s[-1]})")
+            return
+
+        ctx = mp.get_context("spawn")
+        procs = []
+        for i, shard_ids in enumerate(shards):
+            ckpt_path = os.path.join(ckpt_dir, f"{base}.attempt{attempt}.worker{i}.jsonl")
+            cfg = dict(
+                repo_root=REPO_ROOT, experiments_dir=EXPERIMENTS_DIR,
+                model=args.model, device=args.device, dataset=args.dataset,
+                template=args.template, id_column=id_column, condition=condition,
+                checkpoint_path=ckpt_path, shard_ids=shard_ids,
+                data_path=data_path, curated_heads_path=curated_heads_path,
+            )
+            p = ctx.Process(target=_ablation_worker_main, args=(cfg,), name=f"{label}-w{i}")
+            p.start()
+            procs.append(p)
+
+        for p in procs:
+            p.join()
+        codes = [p.exitcode for p in procs]
+
+        n_oom = sum(1 for c in codes if c == OOM_EXIT_CODE)
+        n_bad = sum(1 for c in codes if c not in (0, OOM_EXIT_CODE))
+        if n_bad:
+            raise RuntimeError(
+                f"[{label}] {n_bad}/{len(codes)} worker(s) failed for a non-memory reason "
+                f"(exit codes: {codes}). Checkpoints are untouched under {ckpt_dir} -- "
+                f"fix the issue and rerun this exact command to resume."
+            )
+        if n_oom:
+            if workers <= 1:
+                raise RuntimeError(f"[{label}] out of memory even with a single worker.")
+            workers -= 1
+            attempt += 1
+            print(f"[{label}] {n_oom} worker(s) hit OOM; retrying pending examples "
+                  f"with {workers} worker(s)")
+            continue
+
+        attempt += 1
+        # loop back: pending is recomputed against the checkpoints just written
+
+
+def run_ablation_parallel(args, task, template, curated_heads_path, id_column, data_path,
+                          out_dir, stem):
+    """
+    Process-parallel ablation for one curated-heads source (one metric's
+    accepted examples from a patching run): shards those examples across
+    workers for each of No-CoT and CoT, exactly like patching's own
+    parallelism, then merges into the same CSVs run_ablations.py's sequential
+    path would have produced.
+    """
+    from src.ablation import load_heads_from_experiment
+    from src.utils import safe_accuracy
+
+    curated_heads = load_heads_from_experiment(curated_heads_path)
+    if not curated_heads:
+        print(f"  no heads found in {os.path.basename(curated_heads_path)}, skipping")
+        return []
+
+    accepted_ids = [str(h["example_id"]) for h in curated_heads]
+    ckpt_dir = os.path.join(out_dir, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
+
+    summary = []
+    for condition in ("NoCoT", "CoT"):
+        base = f"{stem}__{condition}"
+        if args.fresh:
+            removed = 0
+            for p in glob.glob(os.path.join(ckpt_dir, f"{base}.attempt*.worker*.jsonl")):
+                os.remove(p)
+                removed += 1
+            if removed:
+                print(f"[{base}] --fresh: removed {removed} existing checkpoint file(s)")
+
+        _run_ablation_workers_until_processed(
+            f"ablation-{stem}-{condition}", args, accepted_ids, id_column, data_path,
+            curated_heads_path, condition, ckpt_dir, base)
+        if args.dry_run:
+            continue
+
+        pattern = os.path.join(ckpt_dir, f"{base}.attempt*.worker*.jsonl")
+        by_id = _read_checkpoints(pattern)
+        records = [by_id[eid] for eid in accepted_ids if eid in by_id]
+
+        out_csv = os.path.join(out_dir, f"{stem}__ablation_{condition}.csv")
+        result_df = pd.DataFrame(records)
+        result_df.to_csv(out_csv, index=False)
+
+        usable = result_df[~result_df["skipped"]] if "skipped" in result_df.columns else result_df
+        n_skipped = len(result_df) - len(usable)
+        row = {
+            "source": stem,
+            "condition": condition,
+            "normal_acc": safe_accuracy(usable, "normal_correct"),
+            "ablated_acc": safe_accuracy(usable, "ablation_correct"),
+            "random_acc": safe_accuracy(usable, "random_correct"),
+            "n": len(usable),
+            "skipped": n_skipped,
+        }
+        summary.append(row)
+        print(f"      normal {row['normal_acc']:.2f}%   "
+              f"ablated {row['ablated_acc']:.2f}%   "
+              f"random {row['random_acc']:.2f}%   "
+              f"(n={len(usable)}, {n_skipped} skipped)   -> {os.path.basename(out_csv)}")
+
+    return summary
+
+
 def _run_workers_until_processed(name, args, ids, id_column, data_path, ckpt_dir, base, ref_path):
     """
     Shards `ids` across workers and runs them, retrying with fewer workers on
@@ -437,48 +625,40 @@ def run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path, r
                  keep_ids=set(accepted))
 
 
-def _run_ablation_stage(args, task, template, normal_result, data_path):
+def _run_ablation_stage(args, task, template, normal_result, id_column, data_path):
     """
     Runs No-CoT and CoT ablation right after "normal" produces accepted
     examples, once per metric (margin, JSD), verifying the heads that metric
-    selected.
+    selected -- process-parallel, the same way "normal" itself is.
 
-    Takes normal_result -- the {"margin": [...], "jsd": [...]} that
-    run_experiment("normal", ...) already returned -- directly rather than
-    re-reading the merged JSON files, which also sidesteps the filename
-    convention entirely for this path (only the standalone
-    `python run_ablations.py` CLI needs to get that right).
-
-    Not process-parallel: ablation is a sequential per-example generation
-    loop, cheap enough per example that splitting it across workers hasn't
-    been worth the complexity so far.
+    normal_result -- the {"margin": [...], "jsd": [...]} run_experiment
+    already returned -- isn't used directly here beyond checking it is
+    non-empty: each metric's curated heads are reloaded by
+    run_ablation_parallel from the merged file _merge() already wrote for
+    "normal" (out_dir/{base}__{metric}.json), since that is the shape workers
+    need to reload from disk anyway.
     """
-    accepted_ids = {str(h["example_id"]) for h in normal_result.get("margin", [])}
-    if not accepted_ids:
+    if not any(normal_result.values()):
         print("\n[ablation] skipped: 'normal' produced no accepted examples")
         return
 
     print("\n" + "=" * 60)
-    print("ABLATION  (verifying the heads 'normal' selected)")
+    print("ABLATION  (verifying the heads 'normal' selected, in parallel)")
     print("=" * 60)
 
     ablation_out_dir = os.path.join(args.out_dir, "ablation")
     os.makedirs(ablation_out_dir, exist_ok=True)
 
-    sampled_df = pd.read_json(data_path)
-    print(f"Loading model {args.model} for ablation ...")
-    loader = _resolve_loader(rp)
-    model = loader(args.model, device=args.device)
-
     base = rp.run_id(args.model, args.dataset, "normal", args.template)
     summary = []
-    for metric, curated_heads in normal_result.items():
-        if not curated_heads:
+    for metric in normal_result:
+        curated_heads_path = os.path.join(args.out_dir, f"{base}__{metric}.json")
+        if not normal_result[metric]:
             print(f"\n[ablation] {metric}: no accepted examples, skipping")
             continue
         print(f"\n--- ablating heads selected by {metric} ---")
-        summary.extend(run_ablations.run_ablation_conditions(
-            model, sampled_df, task, template, curated_heads,
+        summary.extend(run_ablation_parallel(
+            args, task, template, curated_heads_path, id_column, data_path,
             ablation_out_dir, stem=f"{base}__{metric}"))
 
     if summary:
@@ -594,7 +774,7 @@ def main():
                                 ref_path=ref_path)
 
         if name == "normal" and args.ablation and result:
-            _run_ablation_stage(args, task, template, result, data_path)
+            _run_ablation_stage(args, task, template, result, id_column, data_path)
 
     print("\nAll requested experiments completed.")
 

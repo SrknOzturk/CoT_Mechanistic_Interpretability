@@ -32,7 +32,6 @@ from src.utils import (
     _decode_generated_only,
     _decode_single_token,
     build_heads_by_example_id_from_curated,
-    get_answer_from_row,
     get_example_id_from_row,
     get_type_from_row,
     make_cot_prompt_from_row,
@@ -40,6 +39,42 @@ from src.utils import (
     make_zero_ablation_hooks,
     sample_random_heads_same_count_for_example,
 )
+
+
+# ============================================================
+# Checkpointing (per-example JSONL, mirrors run_patchings.py's)
+# ============================================================
+
+def _load_ablation_checkpoint(path):
+    """Reads a JSONL checkpoint into {example_id: row_dict}."""
+    done = {}
+    if path and os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    done[str(rec["example_id"])] = rec
+                except (json.JSONDecodeError, KeyError):
+                    pass
+    return done
+
+
+def _append_ablation_checkpoint(path, record):
+    """
+    Appends and flushes one row. default=str is defensive: a couple of the
+    row's fields (the gold answer, in particular) can come straight out of a
+    pandas cell as a numpy scalar, which json.dumps otherwise rejects.
+    """
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
 
 # ============================================================
 # Generation under ablation
@@ -159,6 +194,7 @@ def run_nocot_ablation_using_curated_heads(
     verbose=False,
     task=None,
     template=None,
+    checkpoint_path=None,
 ):
     """
     Her sampled_df örneği için:
@@ -182,6 +218,7 @@ def run_nocot_ablation_using_curated_heads(
     )
 
     results = []
+    done = _load_ablation_checkpoint(checkpoint_path)
 
     total = len(sampled_df) if max_examples is None else min(len(sampled_df), max_examples)
     pbar = tqdm(total=total, desc="Running No-CoT Ablation")
@@ -193,7 +230,14 @@ def run_nocot_ablation_using_curated_heads(
             break
 
         example_id = get_example_id_from_row(row, idx)
-        true_ans = get_answer_from_row(row)
+        cached = done.get(str(example_id))
+        if cached is not None:
+            results.append(cached)
+            count += 1
+            pbar.update(1)
+            continue
+
+        true_ans = task.gold_from_row(row)
         q_type = get_type_from_row(row)
 
         nocot_prompt = make_nocot_prompt_from_row(row, template=template, task=task)
@@ -267,7 +311,7 @@ def run_nocot_ablation_using_curated_heads(
             random_extracted = task.extract(random_text)
             random_correct = task.answers_equal(random_extracted, true_ans)
 
-        results.append({
+        record = {
             "example_id": example_id,
             "Type": q_type,
             "skipped": skipped,
@@ -290,7 +334,9 @@ def run_nocot_ablation_using_curated_heads(
             "random_correct": random_correct,
 
             "correct": ablation_correct if ablation_correct is not None else False
-        })
+        }
+        results.append(record)
+        _append_ablation_checkpoint(checkpoint_path, record)
 
         count += 1
         pbar.update(1)
@@ -325,6 +371,7 @@ def run_cot_ablation_using_curated_heads(
     verbose=False,
     task=None,
     template=None,
+    checkpoint_path=None,
 ):
     """
     Her sampled_df örneği için:
@@ -348,6 +395,7 @@ def run_cot_ablation_using_curated_heads(
     )
 
     results = []
+    done = _load_ablation_checkpoint(checkpoint_path)
 
     total = len(sampled_df) if max_examples is None else min(len(sampled_df), max_examples)
     pbar = tqdm(total=total, desc="Running CoT Ablation")
@@ -359,7 +407,14 @@ def run_cot_ablation_using_curated_heads(
             break
 
         example_id = get_example_id_from_row(row, idx)
-        true_ans = get_answer_from_row(row)
+        cached = done.get(str(example_id))
+        if cached is not None:
+            results.append(cached)
+            count += 1
+            pbar.update(1)
+            continue
+
+        true_ans = task.gold_from_row(row)
         q_type = get_type_from_row(row)
 
         cot_prompt = make_cot_prompt_from_row(row, template=template)
@@ -436,7 +491,7 @@ def run_cot_ablation_using_curated_heads(
             random_extracted = task.extract(random_text)
             random_correct = task.answers_equal(random_extracted, true_ans)
 
-        results.append({
+        record = {
             "example_id": example_id,
             "Type": q_type,
             "skipped": skipped,
@@ -459,7 +514,9 @@ def run_cot_ablation_using_curated_heads(
             "random_correct": random_correct,
 
             "correct": ablation_correct if ablation_correct is not None else False
-        })
+        }
+        results.append(record)
+        _append_ablation_checkpoint(checkpoint_path, record)
 
         count += 1
         pbar.update(1)
