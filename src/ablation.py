@@ -80,6 +80,32 @@ def _append_ablation_checkpoint(path, record):
 # Generation under ablation
 # ============================================================
 
+def _last_position_logits(model, tokens):
+    """Run the transformer but unembed only its final sequence position.
+
+    ``HookedTransformer.forward`` normally unembeds every position into the
+    full vocabulary.  Autoregressive generation only reads the final position,
+    and Qwen's 152k-token vocabulary makes the unused logits increasingly large
+    as the generated trace grows.  Stopping after the last transformer block,
+    slicing the residual, then applying the same final norm and unembed is
+    exactly equivalent because both operations are position-wise.
+    """
+    residual = model(
+        tokens,
+        return_type=None,
+        stop_at_layer=model.cfg.n_layers,
+    )
+    final_residual = residual[:, -1:, :]
+    if model.cfg.normalization_type is not None:
+        final_residual = model.ln_final(final_residual)
+    logits = model.unembed(final_residual)
+    if model.cfg.output_logits_soft_cap > 0.0:
+        logits = model.cfg.output_logits_soft_cap * torch.tanh(
+            logits / model.cfg.output_logits_soft_cap
+        )
+    return logits[0, -1, :]
+
+
 def _generate_with_ablation(
     model,
     prompt,
@@ -116,14 +142,23 @@ def _generate_with_ablation(
         nonlocal output_tokens
         generated = 0
 
-        with torch.no_grad():
+        # A previous trajectory may leave large, differently-sized cached CUDA
+        # blocks behind.  Releasing only unused blocks here preserves tensors
+        # and results while giving the next trajectory a compact starting point.
+        if str(device).startswith("cuda"):
+            torch.cuda.empty_cache()
+
+        with torch.inference_mode():
             # phase 1 -- reason until the answer trigger
             current_text = _decode(model, output_tokens)
             while not task.ends_reasoning(current_text) and generated < max_new_tokens:
-                logits = model(output_tokens[:, -context_window:])
-                next_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
+                logits = _last_position_logits(model, output_tokens[:, -context_window:])
+                next_token = logits.argmax(dim=-1, keepdim=True)
                 output_tokens = _append_token(output_tokens, next_token)
+                del logits
                 generated += 1
+                if generated % 64 == 0 and str(device).startswith("cuda"):
+                    torch.cuda.empty_cache()
                 if print_tokens:
                     print(generated, repr(_decode_single_token(model, next_token)))
                 current_text = _decode(model, output_tokens)
@@ -134,13 +169,16 @@ def _generate_with_ablation(
 
             # phase 2 -- collect the answer tokens
             while generated < max_new_tokens:
-                logits = model(output_tokens[:, -context_window:])
-                next_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
+                logits = _last_position_logits(model, output_tokens[:, -context_window:])
+                next_token = logits.argmax(dim=-1, keepdim=True)
+                del logits
                 token_str = _decode_single_token(model, next_token)
                 if not task.is_answer_continuation(token_str):
                     break
                 output_tokens = _append_token(output_tokens, next_token)
                 generated += 1
+                if generated % 64 == 0 and str(device).startswith("cuda"):
+                    torch.cuda.empty_cache()
                 if print_tokens:
                     print(generated, repr(token_str))
 

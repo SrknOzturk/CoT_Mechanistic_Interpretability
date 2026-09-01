@@ -150,11 +150,12 @@ def _worker_main(cfg):
                 kwargs["max_generation_steps"] = cfg["max_steps"]
         else:
             kwargs["output_json_path"] = None
-            kwargs["max_generation_steps"] = cfg["max_steps"]
             key = "jsd_heads_per_pos" if name.endswith("jsd") else "margin_ratio_heads_per_pos"
             kwargs[key] = cfg["heads_per_pos"]
             if name in _rp.RANDOM_REFERENCE:
                 kwargs["reference_json_path"] = cfg["reference_json_path"]
+            else:
+                kwargs["max_generation_steps"] = cfg["max_steps"]
 
         _rp.EXPERIMENTS[name](**kwargs)
         _sys.exit(0)
