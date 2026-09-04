@@ -49,8 +49,11 @@ def main():
     ap.add_argument("--model", default="qwen2.5-0.5b", choices=sorted(MODELS))
     ap.add_argument("--dataset", default="svamp", choices=sorted(TASKS))
     ap.add_argument("--template", default=DEFAULT_TEMPLATE, choices=sorted(TEMPLATES))
+    ap.add_argument("--experiment", default="normal",
+                    choices=["normal", "random", "random_margin", "random_jsd"],
+                    help="completed patching experiment whose selected heads will be ablated")
     ap.add_argument("--metric", default="both", choices=["margin", "jsd", "both"],
-                    help="which of normal's two outputs to ablate the heads of")
+                    help="which output metric to ablate (combined normal/random runs only)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--results-dir", default=rp.RESULTS_DIR,
                     help="where normal's merged {base}__{metric}.json files live")
@@ -82,20 +85,27 @@ def main():
         print(f"[ERROR] dataset not found: {data_path}")
         sys.exit(1)
 
-    metrics = ["margin", "jsd"] if args.metric == "both" else [args.metric]
-    base = rp.run_id(args.model, args.dataset, "normal", args.template)
+    if args.experiment.endswith("_margin"):
+        metrics = ["margin"]
+    elif args.experiment.endswith("_jsd"):
+        metrics = ["jsd"]
+    else:
+        metrics = ["margin", "jsd"] if args.metric == "both" else [args.metric]
+    base = rp.run_id(args.model, args.dataset, args.experiment, args.template)
+    multi_output = args.experiment in rp.MULTI_OUTPUT
 
     summary = []
     for metric in metrics:
-        curated_heads_path = os.path.join(args.results_dir, f"{base}__{metric}.json")
+        curated_heads_path = os.path.join(
+            args.results_dir, f"{base}__{metric}.json" if multi_output else f"{base}.json")
         print(f"\n{'=' * 20} {metric} {'=' * 20}")
         if not os.path.exists(curated_heads_path):
             print(f"  Skipping: {os.path.basename(curated_heads_path)} not found. "
-                  f"Run the patching experiment ('normal') first.")
+                      f"Run the patching experiment ('{args.experiment}') first.")
             continue
         summary.extend(run_ablation_parallel(
             args, task, template, curated_heads_path, task.id_column, data_path,
-            out_dir, stem=f"{base}__{metric}"))
+            out_dir, stem=f"{base}__{metric}" if multi_output else base))
 
     if args.dry_run:
         return

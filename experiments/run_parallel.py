@@ -626,41 +626,56 @@ def run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path, r
                  keep_ids=set(accepted))
 
 
-def _run_ablation_stage(args, task, template, normal_result, id_column, data_path):
-    """
-    Runs No-CoT and CoT ablation right after "normal" produces accepted
-    examples, once per metric (margin, JSD), verifying the heads that metric
-    selected -- process-parallel, the same way "normal" itself is.
+def _ablation_outputs_for_experiment(name, result):
+    """Return ``(metric, records)`` pairs produced by a patching experiment."""
+    if isinstance(result, dict):
+        return list(result.items())
+    if name.endswith("_margin"):
+        return [("margin", result)]
+    if name.endswith("_jsd"):
+        return [("jsd", result)]
+    return []
 
-    normal_result -- the {"margin": [...], "jsd": [...]} run_experiment
-    already returned -- isn't used directly here beyond checking it is
-    non-empty: each metric's curated heads are reloaded by
-    run_ablation_parallel from the merged file _merge() already wrote for
-    "normal" (out_dir/{base}__{metric}.json), since that is the shape workers
-    need to reload from disk anyway.
+
+def _run_ablation_stage(args, task, template, experiment, result, id_column, data_path):
     """
-    if not any(normal_result.values()):
-        print("\n[ablation] skipped: 'normal' produced no accepted examples")
+    Runs No-CoT and CoT ablation after a patching experiment produces accepted
+    examples, once per output metric, verifying the heads that experiment
+    selected -- process-parallel, the same way patching itself is.
+
+    Each metric's curated heads are reloaded by
+    run_ablation_parallel from the merged file _merge() already wrote for
+    the source experiment, since that is the shape workers need to reload from
+    disk anyway. This includes random-activation patching sources; their
+    ablation is distinct from the random-head control computed inside every
+    ablation run.
+    """
+    outputs = _ablation_outputs_for_experiment(experiment, result)
+    if not any(records for _, records in outputs):
+        print(f"\n[ablation] skipped: '{experiment}' produced no accepted examples")
         return
 
     print("\n" + "=" * 60)
-    print("ABLATION  (verifying the heads 'normal' selected, in parallel)")
+    print(f"ABLATION  (verifying the heads '{experiment}' selected, in parallel)")
     print("=" * 60)
 
     ablation_out_dir = os.path.join(args.out_dir, "ablation")
     os.makedirs(ablation_out_dir, exist_ok=True)
 
-    base = rp.run_id(args.model, args.dataset, "normal", args.template)
+    base = rp.run_id(args.model, args.dataset, experiment, args.template)
     summary = []
-    for metric in normal_result:
-        curated_heads_path = os.path.join(args.out_dir, f"{base}__{metric}.json")
-        if not normal_result[metric]:
+    multi_output = experiment in rp.MULTI_OUTPUT
+    for metric, records in outputs:
+        curated_heads_path = os.path.join(
+            args.out_dir, f"{base}__{metric}.json" if multi_output else f"{base}.json")
+        if not records:
             print(f"\n[ablation] {metric}: no accepted examples, skipping")
             continue
         print(f"\n--- ablating heads selected by {metric} ---")
         summary.extend(run_ablation_parallel(
             args, task, template, curated_heads_path, id_column, data_path,
-            ablation_out_dir, stem=f"{base}__{metric}"))
+            ablation_out_dir,
+            stem=f"{base}__{metric}" if multi_output else base))
 
     if summary:
         sdf = pd.DataFrame(summary)
@@ -704,7 +719,7 @@ def main():
 
     ap.add_argument("--no-ablation", dest="ablation", action="store_false", default=True,
                     help="skip the automatic No-CoT/CoT ablation run that otherwise follows "
-                         "'normal' as soon as it has accepted examples")
+                         "each completed normal or random-activation patching experiment")
     ap.add_argument("--fresh", action="store_true",
                     help="discard existing checkpoints for the requested experiments and start over")
     ap.add_argument("--dry-run", action="store_true",
@@ -774,8 +789,9 @@ def main():
         result = run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path,
                                 ref_path=ref_path)
 
-        if name == "normal" and args.ablation and result:
-            _run_ablation_stage(args, task, template, result, id_column, data_path)
+        if args.ablation and result:
+            _run_ablation_stage(
+                args, task, template, name, result, id_column, data_path)
 
     print("\nAll requested experiments completed.")
 
