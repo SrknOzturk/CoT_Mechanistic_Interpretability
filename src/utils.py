@@ -25,6 +25,7 @@ import nltk
 # answer parsing/comparison is task-specific and lives in src.tasks;
 # re-exported here so existing `from src.utils import ...` callers keep working
 from src.tasks import AnswerTriggerNotFound, extract_last_number, get_task, numeric_equal
+from src.models import MODELS
 # prompt construction is template logic, not model logic; re-exported here
 # so existing `from src.utils import make_*_prompt_from_row` keeps working
 from src.templates import (
@@ -77,9 +78,12 @@ def load_model(model_name="qwen2.5-0.5b", device="cuda"):
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Loading model: {model_name} on {device}...")
+    # CLI commands use the short, stable keys from src.models. TransformerLens
+    # expects its official model/repository name instead.
+    resolved_name = MODELS[model_name].tl_name if model_name in MODELS else model_name
+    print(f"Loading model: {model_name} ({resolved_name}) on {device}...")
     model = HookedTransformer.from_pretrained(
-        model_name,
+        resolved_name,
         device=device,
         dtype=torch.float32
     )

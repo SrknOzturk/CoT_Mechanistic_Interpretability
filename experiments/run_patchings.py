@@ -1325,6 +1325,9 @@ def sequential_random_patching_dual_metric(
         no_cot_t_true_logit = no_cot_logits[t_true].item()
         no_cot_t_true_prob = F.softmax(no_cot_logits, dim=-1)[t_true].item()
         active_jsd = jsd_metric_factory(no_cot_logits)
+        clean_cot_t_true_logit = clean_reference_logits[t_true].item()
+        clean_cot_t_true_prob = F.softmax(clean_reference_logits, dim=-1)[t_true].item()
+        clean_no_cot_jsd = active_jsd(clean_reference_logits)(no_cot_logits).item()
 
         # seeded per (seed, example) so the random control is reproducible
         rand_gen = torch.Generator(device=device)
@@ -1402,9 +1405,13 @@ def sequential_random_patching_dual_metric(
                 "t_true_token_id": t_true,
                 "metrics": {
                     "no_cot_logit": no_cot_t_true_logit,
+                    "clean_cot_logit": clean_cot_t_true_logit,
                     "patched_logit": patched_t_true_logit,
                     "logit_increase": patched_t_true_logit - no_cot_t_true_logit,
                     "no_cot_prob": no_cot_t_true_prob,
+                    "clean_cot_prob": clean_cot_t_true_prob,
+                    "cot_no_cot_prob_gap": clean_cot_t_true_prob - no_cot_t_true_prob,
+                    "clean_no_cot_jsd": clean_no_cot_jsd,
                     "patched_prob": patched_t_true_prob,
                     "prob_increase": patched_t_true_prob - no_cot_t_true_prob,
                     cfg["score_key"]: final_score,
@@ -1526,6 +1533,9 @@ def multi_head_patching_dual_metric(
 
         # both factories are bound to the same No-CoT reference
         bound = {name: cfg["factory"](no_cot_logits) for name, cfg in METRICS.items()}
+        clean_cot_t_true_logit = clean_reference_logits[t_true].item()
+        clean_cot_t_true_prob = F.softmax(clean_reference_logits, dim=-1)[t_true].item()
+        clean_no_cot_jsd = bound["jsd"](clean_reference_logits)(no_cot_logits).item()
 
         prompt_ld = cot_prompt
         banks = {name: {} for name in METRICS}
@@ -1639,9 +1649,13 @@ def multi_head_patching_dual_metric(
                 "t_true_token_id": t_true,
                 "metrics": {
                     "no_cot_logit": no_cot_t_true_logit,
+                    "clean_cot_logit": clean_cot_t_true_logit,
                     "patched_logit": patched_t_true_logit,
                     "logit_increase": patched_t_true_logit - no_cot_t_true_logit,
                     "no_cot_prob": no_cot_t_true_prob,
+                    "clean_cot_prob": clean_cot_t_true_prob,
+                    "cot_no_cot_prob_gap": clean_cot_t_true_prob - no_cot_t_true_prob,
+                    "clean_no_cot_jsd": clean_no_cot_jsd,
                     "patched_prob": patched_t_true_prob,
                     "prob_increase": patched_t_true_prob - no_cot_t_true_prob,
                     cfg["score_key"]: score,
