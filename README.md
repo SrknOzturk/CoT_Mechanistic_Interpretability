@@ -50,6 +50,26 @@ python -m spacy download en_core_web_sm
 
 ## 📊 Workflow
 
+### Resume-safe k workflow
+
+The recommended workflow first reuses or completes normal patching, then
+scores every `k` from 1 through 30 from the saved heatmaps:
+
+```bash
+python experiments/run_k_pipeline.py prepare --model olmo2-1b --dataset svamp --workers 1 --gpu-total-gb 48
+```
+
+After inspecting the k-sweep outputs under `results/k_sweep`, choose the k for
+each metric. This command runs one shared random-activation scan and then runs
+CoT and No-CoT ablation for both the normal and random selected heads:
+
+```bash
+python experiments/run_k_pipeline.py complete --model olmo2-1b --dataset svamp --margin-k 6 --jsd-k 15 --workers 1 --gpu-total-gb 48
+```
+
+Every stage uses checkpoints and existing result files. Re-running either
+command resumes missing examples and keeps earlier default-k results intact.
+
 To replicate the study's findings, execute the following steps:
 
 ### 1. Patching (Exploration)

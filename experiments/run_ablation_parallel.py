@@ -59,6 +59,10 @@ def main():
                     help="where normal's merged {base}__{metric}.json files live")
     ap.add_argument("--out-dir", default=None,
                     help="where ablation CSVs and checkpoints go (default: <results-dir>/ablation)")
+    ap.add_argument("--results-file", default=None,
+                    help="ablate this exact JSON file (supports compact k-sweep files)")
+    ap.add_argument("--output-stem", default=None,
+                    help="output name used with --results-file (default: input filename)")
 
     ap.add_argument("--workers", type=int, default=None,
                     help="worker process count; omit to size automatically from GPU memory")
@@ -96,8 +100,10 @@ def main():
 
     summary = []
     for metric in metrics:
-        curated_heads_path = os.path.join(
+        curated_heads_path = args.results_file or os.path.join(
             args.results_dir, f"{base}__{metric}.json" if multi_output else f"{base}.json")
+        stem = (args.output_stem or os.path.splitext(os.path.basename(curated_heads_path))[0]) \
+            if args.results_file else (f"{base}__{metric}" if multi_output else base)
         print(f"\n{'=' * 20} {metric} {'=' * 20}")
         if not os.path.exists(curated_heads_path):
             print(f"  Skipping: {os.path.basename(curated_heads_path)} not found. "
@@ -105,14 +111,16 @@ def main():
             continue
         summary.extend(run_ablation_parallel(
             args, task, template, curated_heads_path, task.id_column, data_path,
-            out_dir, stem=f"{base}__{metric}" if multi_output else base))
+            out_dir, stem=stem))
 
     if args.dry_run:
         return
 
     if summary:
         sdf = pd.DataFrame(summary)
-        summary_path = os.path.join(out_dir, f"{base}__ablation_summary.csv")
+        summary_stem = args.output_stem or (os.path.splitext(
+            os.path.basename(args.results_file))[0] if args.results_file else base)
+        summary_path = os.path.join(out_dir, f"{summary_stem}__ablation_summary.csv")
         sdf.to_csv(summary_path, index=False)
         print(f"\nSummary written to {summary_path}")
         print(sdf.to_string(index=False))

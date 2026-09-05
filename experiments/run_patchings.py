@@ -882,6 +882,29 @@ def sequential_random_patching_margin(
     d_head = model.cfg.d_head
     done = _load_checkpoint(checkpoint_path)
 
+    # A result directory may have been copied from another machine without its
+    # checkpoints. Reconstruct paired completed entries from the two JSON
+    # outputs so those expensive full-head random scans are still reusable.
+    existing_by_metric = {}
+    for name, path in (output_paths or {}).items():
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing_by_metric[name] = {
+                    str(item["example_id"]): item for item in json.load(f)
+                    if "example_id" in item
+                }
+        except (OSError, json.JSONDecodeError):
+            pass
+    if all(name in existing_by_metric for name in METRICS):
+        shared_ids = set.intersection(
+            *(set(existing_by_metric[name]) for name in METRICS))
+        for eid in shared_ids:
+            done.setdefault(eid, {
+                name: existing_by_metric[name][eid] for name in METRICS
+            })
+
     for _, row in tqdm(df.iterrows(), total=len(df), desc="Random Control (Margin)"):
         example_id = row[id_column]
         cached = done.get(str(example_id))
@@ -1281,10 +1304,17 @@ def sequential_random_patching_dual_metric(
     for name, path in (reference_json_paths or {}).items():
         with open(path, "r", encoding="utf-8") as f:
             ref_data = json.load(f)
-        reference_heads_maps[name] = {
-            item["example_id"]: item["patching_results"]["final_multi_head"]["num_heads_patched"]
-            for item in ref_data if "example_id" in item
-        }
+        reference_heads_maps[name] = {}
+        for item in ref_data:
+            if "example_id" not in item or item.get("skipped"):
+                continue
+            count = item.get("num_heads_patched")
+            if count is None:
+                count = (item.get("patching_results", {})
+                             .get("final_multi_head", {})
+                             .get("num_heads_patched"))
+            if count is not None:
+                reference_heads_maps[name][str(item["example_id"])] = int(count)
 
     n_layers = model.cfg.n_layers
     n_heads = model.cfg.n_heads
@@ -1360,7 +1390,8 @@ def sequential_random_patching_dual_metric(
 
         for name, cfg in METRICS.items():
             r_rand[name].sort(key=lambda x: x["score"], reverse=cfg["reverse"])
-            n_heads_to_patch = reference_heads_maps.get(name, {}).get(example_id, heads_per_pos)
+            n_heads_to_patch = reference_heads_maps.get(name, {}).get(
+                str(example_id), heads_per_pos)
             h_topn = r_rand[name][:n_heads_to_patch]
 
             layer_to_specs = defaultdict(list)

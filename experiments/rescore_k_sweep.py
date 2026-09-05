@@ -127,7 +127,8 @@ def main():
     ap.add_argument("--model", default="qwen2.5-0.5b", choices=sorted(MODELS))
     ap.add_argument("--dataset", default="svamp", choices=sorted(TASKS))
     ap.add_argument("--template", default=DEFAULT_TEMPLATE, choices=sorted(TEMPLATES))
-    ap.add_argument("--k", type=int, nargs="+", default=[1, 2, 3, 4, 5])
+    ap.add_argument("--k", type=int, nargs="+", default=list(range(1, 31)),
+                    help="k values to score (default: every value from 1 through 30)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--ctx", type=int, default=2048)
     ap.add_argument("--results-dir", default=os.path.join(REPO_ROOT, "results"))
@@ -154,6 +155,15 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     checkpoint = os.path.join(out_dir, f"{stem}__k_sweep.jsonl")
     done = _read_jsonl(checkpoint)
+    # Results are often copied between machines without their JSONL files.
+    # Treat completed compact outputs as checkpoints too.
+    for metric in METRICS:
+        for k in ks:
+            existing_path = os.path.join(out_dir, f"{stem}__{metric}__k{k}.json")
+            if not os.path.exists(existing_path):
+                continue
+            for row in _load_records(existing_path).values():
+                done[(str(row["example_id"]), metric, k)] = row
     model = None if args.select_only else load_model(args.model, args.device)
 
     for example_id in tqdm(ids, desc="k sweep"):

@@ -612,11 +612,17 @@ def load_heads_from_experiment(file_path):
             if eid is None:
                 continue
 
-            selected = (
-                item.get("patching_results", {})
-                    .get("final_multi_head", {})
-                    .get("selected_heads", [])
-            )
+            # Standard patching files keep the selection under
+            # patching_results.final_multi_head.  k-sweep files are deliberately
+            # smaller and keep it at the top level.  Supporting both lets the
+            # same ablation runner consume old runs and arbitrary-k rescoring.
+            selected = item.get("selected_heads")
+            if selected is None:
+                selected = (
+                    item.get("patching_results", {})
+                        .get("final_multi_head", {})
+                        .get("selected_heads", [])
+                )
 
             heads = []
 
