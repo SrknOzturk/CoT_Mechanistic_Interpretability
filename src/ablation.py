@@ -295,12 +295,13 @@ def run_nocot_ablation_using_curated_heads(
             task=task,
         )
 
-        # If the unablated run never reached the trigger there is no baseline to
-        # ablate away, so the row is marked and excluded from accuracy rather than
-        # counted as a failure caused by the ablation.
-        skipped = task.answer_trigger not in (normal_text or "")
         normal_extracted = task.extract(normal_text)
         normal_correct = task.answers_equal(normal_extracted, true_ans)
+        # The No-CoT prompt already ends with the answer trigger and the
+        # generator returns only newly generated text.  Looking for the trigger
+        # inside normal_text would therefore mark every valid answer as skipped.
+        # A baseline is unusable only when no task answer can be extracted.
+        skipped = normal_extracted is None
 
         # ------------------------------
         # Selected-head ablation
