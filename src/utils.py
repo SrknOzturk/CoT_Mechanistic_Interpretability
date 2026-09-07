@@ -9,6 +9,7 @@ import os
 import re
 import random
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Optional, Tuple, Callable, Union, List, Dict, Any
 
 # 2. Third-Party Data & ML Libraries
@@ -121,6 +122,28 @@ def get_type_from_row(row: pd.Series) -> Optional[str]:
     return None
 
 
+def clean_equation_to_equals_format(equation: str) -> str:
+    """Turns SVAMP's "( 84.0 + 8.0 )" into "84.0 + 8.0 = "."""
+    equation = str(equation).strip().replace("(", "").replace(")", "")
+    return re.sub(r"\s+", " ", equation).strip() + " = "
+
+
+def make_direct_equation_prompt_from_row(row: pd.Series, task=None) -> Optional[str]:
+    """
+    The Direct-Equation condition: the arithmetic alone, with no question text
+    and no reasoning cue.
+
+    Example: "76.0 - 25.0 = The answer is "
+
+    Returns None when the row carries no equation, which is every dataset other
+    than SVAMP -- the caller skips those rather than inventing a prompt.
+    """
+    task = task or get_task()
+    if "Equation" not in row.index or pd.isna(row["Equation"]):
+        return None
+    return clean_equation_to_equals_format(row["Equation"]) + task.answer_trigger
+
+
 def safe_accuracy(df_result: pd.DataFrame, column_name: str) -> float:
     """
     Calculates accuracy from a boolean column.
@@ -183,6 +206,69 @@ def _is_numeric_answer_token(token_str: str) -> bool:
     return all(ch in allowed_chars for ch in stripped)
 
 
+@dataclass(frozen=True)
+class DecodingConfig:
+    """
+    Greedy-decoding penalties, both inactive at their defaults.
+
+    Needed because base models fall into verbatim loops on long deductive
+    prompts -- ProntoQA in particular, where a looping trace never reaches the
+    answer trigger and the example is thrown away as a skip. SVAMP's traces are
+    short enough that neither penalty ever fires, so the defaults keep every
+    existing result reproducible.
+    """
+    repetition_penalty: float = 1.0
+    no_repeat_ngram_size: int = 0
+
+    @property
+    def active(self) -> bool:
+        return self.repetition_penalty != 1.0 or self.no_repeat_ngram_size > 0
+
+
+DEFAULT_DECODING = DecodingConfig()
+
+
+def apply_decoding_penalties(logits, generated_ids, decoding=None):
+    """
+    Applies the repetition penalties to one step's last-position logits.
+
+    Only tokens the model has *generated* are considered, never the prompt: the
+    1-shot demonstration is there to be imitated, so penalising its vocabulary
+    would fight the format the whole protocol depends on. A loop, by contrast,
+    is always something the model produced itself.
+
+    Returns the logits unchanged when both penalties are at their defaults, so
+    the untouched path stays bit-identical.
+    """
+    decoding = decoding or DEFAULT_DECODING
+    if not decoding.active or not generated_ids:
+        return logits
+
+    logits = logits.clone()
+
+    if decoding.repetition_penalty != 1.0:
+        seen = torch.tensor(sorted(set(generated_ids)), device=logits.device, dtype=torch.long)
+        scores = logits[seen]
+        # the standard formulation: a positive score is divided, a negative one
+        # multiplied, so both move toward zero rather than flipping sign
+        logits[seen] = torch.where(
+            scores > 0, scores / decoding.repetition_penalty, scores * decoding.repetition_penalty
+        )
+
+    n = decoding.no_repeat_ngram_size
+    if n > 0 and len(generated_ids) >= n:
+        prefix = tuple(generated_ids[-(n - 1):]) if n > 1 else ()
+        banned = {
+            generated_ids[i + n - 1]
+            for i in range(len(generated_ids) - n + 1)
+            if tuple(generated_ids[i:i + n - 1]) == prefix
+        }
+        for token_id in banned:
+            logits[token_id] = float("-inf")
+
+    return logits
+
+
 def _strip_bos(model, text: str) -> str:
     """
     Removes the leading BOS marker from a decoded sequence.
@@ -202,7 +288,8 @@ def _strip_bos(model, text: str) -> str:
 # ===========================================================================
 # Old Standard Generation Blocks (Required by Patching)
 # ===========================================================================
-def generate_till_answer(model, prompt: str, max_new_tokens: int = 1024, task=None):
+def generate_till_answer(model, prompt: str, max_new_tokens: int = 1024, task=None,
+                         decoding=None):
     """
     Generates text until the model produces a specific answer trigger and continues
     capturing the numerical result while handling multi-token digits.
@@ -213,12 +300,15 @@ def generate_till_answer(model, prompt: str, max_new_tokens: int = 1024, task=No
 
     tokens = model.to_tokens(prompt, prepend_bos=True).to(device)
     output_tokens = tokens.clone()
+    generated_ids = []
 
     with torch.no_grad():
         for _ in range(max_new_tokens):
             logits = model(output_tokens[:, -2048:])
-            next_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
+            step_logits = apply_decoding_penalties(logits[0, -1, :], generated_ids, decoding)
+            next_token = step_logits.argmax(dim=-1, keepdim=True)
             output_tokens = torch.cat([output_tokens, next_token.unsqueeze(0)], dim=1)
+            generated_ids.append(int(next_token.item()))
 
             current_text = model.to_string(output_tokens)[0]
             if task.ends_reasoning(current_text):
@@ -239,9 +329,10 @@ def generate_till_answer(model, prompt: str, max_new_tokens: int = 1024, task=No
     return final_text, answer_without_number
 
 
-def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int = 1024, task=None):
+def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int = 1024, task=None,
+                                        decoding=None):
     """
-    Generates the full answer using a CoT prompt and returns the logits of the first 
+    Generates the full answer using a CoT prompt and returns the logits of the first
     token immediately following 'The answer is '.
     """
     task = task or get_task()
@@ -250,13 +341,16 @@ def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int 
 
     tokens = model.to_tokens(prompt, prepend_bos=True).to(device)
     output_tokens = tokens.clone()
+    generated_ids = []
 
     with torch.no_grad():
         answer_token_logits = None
         for _ in range(max_new_tokens):
             logits = model(output_tokens[:, -2048:])
-            next_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
+            step_logits = apply_decoding_penalties(logits[0, -1, :], generated_ids, decoding)
+            next_token = step_logits.argmax(dim=-1, keepdim=True)
             output_tokens = torch.cat([output_tokens, next_token.unsqueeze(0)], dim=1)
+            generated_ids.append(int(next_token.item()))
 
             current_text = model.to_string(output_tokens)[0]
             if task.ends_reasoning(current_text):

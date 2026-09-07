@@ -26,7 +26,12 @@ from src.metrics import make_jsd_metric, margin_recovery_ratio
 from src.models import MODELS
 from src.tasks import TASKS, AnswerTriggerNotFound
 from src.templates import DEFAULT_TEMPLATE, TEMPLATES, get_template
-from src.utils import generate_full_answer_and_get_logits, generate_till_answer, load_model
+from src.utils import (
+    DecodingConfig,
+    generate_full_answer_and_get_logits,
+    generate_till_answer,
+    load_model,
+)
 
 
 METRICS = {
@@ -96,7 +101,7 @@ def _read_jsonl(path):
     return rows
 
 
-def _reconstruct_vectors(model, prompt, task, needed, ctx, expected_tokens):
+def _reconstruct_vectors(model, prompt, task, needed, ctx, expected_tokens, decoding=None):
     """Regenerate the deterministic trace and retain only requested head vectors."""
     vectors = {}
     current = prompt
@@ -118,7 +123,8 @@ def _reconstruct_vectors(model, prompt, task, needed, ctx, expected_tokens):
                 ].detach().cpu().clone()
             del cache
         if step < max_step:
-            _, current = generate_till_answer(model, current, max_new_tokens=1, task=task)
+            _, current = generate_till_answer(model, current, max_new_tokens=1, task=task,
+                                              decoding=decoding)
     return vectors
 
 
@@ -132,9 +138,16 @@ def main():
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--ctx", type=int, default=2048)
     ap.add_argument("--results-dir", default=os.path.join(REPO_ROOT, "results"))
+    ap.add_argument("--repetition-penalty", type=float, default=1.0,
+                    help="must match the penalties the source run used, or the clean-trace "
+                         "check below will reject the regenerated trace (1.0 = off)")
+    ap.add_argument("--no-repeat-ngram-size", type=int, default=0,
+                    help="must match the penalties the source run used (0 = off)")
     ap.add_argument("--select-only", action="store_true",
                     help="write selected heads without loading the model")
     args = ap.parse_args()
+    decoding = DecodingConfig(repetition_penalty=args.repetition_penalty,
+                              no_repeat_ngram_size=args.no_repeat_ngram_size)
     ks = sorted(set(args.k))
     if not ks or min(ks) < 1:
         raise SystemExit("every k must be a positive integer")
@@ -205,7 +218,8 @@ def main():
         cot_prompt = row[template.cot_col]
         nocot_prompt = row[template.nocot_col] + template.corrupt_suffix
         try:
-            _, clean_logits = generate_full_answer_and_get_logits(model, cot_prompt, task=task)
+            _, clean_logits = generate_full_answer_and_get_logits(model, cot_prompt, task=task,
+                                                                  decoding=decoding)
         except AnswerTriggerNotFound as exc:
             for metric, k in pending:
                 _append(checkpoint, {"example_id": example_id, "metric": metric,
@@ -228,7 +242,8 @@ def main():
                 needed[item["step"]].append((metric, k, item["layer"], item["head"]))
         token_rows = source["margin"][example_id]["patching_results"]["token_level"]
         expected = [x["token_id"] for x in token_rows]
-        vectors = _reconstruct_vectors(model, cot_prompt, task, needed, args.ctx, expected)
+        vectors = _reconstruct_vectors(model, cot_prompt, task, needed, args.ctx, expected,
+                                       decoding=decoding)
 
         for (metric, k), selected in pending.items():
             per_layer = defaultdict(list)

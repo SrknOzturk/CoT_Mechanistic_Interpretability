@@ -72,6 +72,16 @@ def main():
     ap.add_argument("--worker-cap", type=int, default=8,
                     help="upper bound on auto-sized worker count (compute saturates before VRAM does)")
 
+    ap.add_argument("--equation-ablation", action="store_true",
+                    help="also run the Direct-Equation ablation condition (SVAMP only: it "
+                         "needs the Equation column)")
+    ap.add_argument("--ablation-max-new-tokens", type=int, default=2048,
+                    help="token budget per generated trajectory (default: 2048)")
+    ap.add_argument("--repetition-penalty", type=float, default=1.0,
+                    help="divide already-generated tokens' logits by this (1.0 = off)")
+    ap.add_argument("--no-repeat-ngram-size", type=int, default=0,
+                    help="ban repeating any n-gram of this size within the generated text "
+                         "(0 = off)")
     ap.add_argument("--fresh", action="store_true",
                     help="discard existing ablation checkpoints and start over")
     ap.add_argument("--dry-run", action="store_true",
@@ -87,6 +97,10 @@ def main():
     data_path = os.path.join(REPO_ROOT, "data", "processed", rp.DATASETS[args.dataset])
     if not os.path.exists(data_path):
         print(f"[ERROR] dataset not found: {data_path}")
+        sys.exit(1)
+    if args.equation_ablation and "Equation" not in pd.read_json(data_path).columns:
+        print(f"[ERROR] --equation-ablation needs an 'Equation' column, which "
+              f"{args.dataset} does not have")
         sys.exit(1)
 
     if args.experiment.endswith("_margin"):

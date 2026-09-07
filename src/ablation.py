@@ -28,6 +28,7 @@ from src.tasks import get_task
 from src.templates import get_template
 from src.utils import (
     _append_token,
+    apply_decoding_penalties,
     _decode,
     _decode_generated_only,
     _decode_single_token,
@@ -35,8 +36,10 @@ from src.utils import (
     get_example_id_from_row,
     get_type_from_row,
     make_cot_prompt_from_row,
+    make_direct_equation_prompt_from_row,
     make_nocot_prompt_from_row,
     make_zero_ablation_hooks,
+    sample_random_heads_matched_layers_for_example,
     sample_random_heads_same_count_for_example,
 )
 
@@ -115,6 +118,7 @@ def _generate_with_ablation(
     prepend_bos=True,
     print_tokens=False,
     task=None,
+    decoding=None,
 ):
     """
     Greedy generation with the given heads zeroed for the whole trajectory.
@@ -126,6 +130,10 @@ def _generate_with_ablation(
     Phase 2 is what makes multi-token answers work: 92 arrives as "9" + "2", and
     True can arrive as "Tr" + "ue". The task owns that decision, because digits
     and words need different gates.
+
+    `decoding` (a DecodingConfig) applies its repetition penalties to phase 1
+    only. Phase 2 must stay unpenalised or a legitimately repeated answer token
+    -- the second 5 of "55" -- would be suppressed.
 
     Returns the generated text only, never the prompt, so no BOS handling is
     needed downstream.
@@ -141,6 +149,7 @@ def _generate_with_ablation(
     def _loop():
         nonlocal output_tokens
         generated = 0
+        generated_ids = []
 
         # A previous trajectory may leave large, differently-sized cached CUDA
         # blocks behind.  Releasing only unused blocks here preserves tensors
@@ -153,9 +162,11 @@ def _generate_with_ablation(
             current_text = _decode(model, output_tokens)
             while not task.ends_reasoning(current_text) and generated < max_new_tokens:
                 logits = _last_position_logits(model, output_tokens[:, -context_window:])
-                next_token = logits.argmax(dim=-1, keepdim=True)
+                step_logits = apply_decoding_penalties(logits, generated_ids, decoding)
+                next_token = step_logits.argmax(dim=-1, keepdim=True)
                 output_tokens = _append_token(output_tokens, next_token)
-                del logits
+                generated_ids.append(int(next_token.item()))
+                del logits, step_logits
                 generated += 1
                 if generated % 64 == 0 and str(device).startswith("cuda"):
                     torch.cuda.empty_cache()
@@ -192,18 +203,19 @@ def _generate_with_ablation(
 
 
 def generate_with_optional_ablation(
-    model, prompt, ablated_heads=None, max_new_tokens=1024, print_tokens=False, task=None
+    model, prompt, ablated_heads=None, max_new_tokens=1024, print_tokens=False, task=None,
+    decoding=None,
 ):
     """No-CoT condition: the prompt already ends at the answer trigger."""
     return _generate_with_ablation(
         model, prompt, ablated_heads=ablated_heads, max_new_tokens=max_new_tokens,
-        print_tokens=print_tokens, task=task,
+        print_tokens=print_tokens, task=task, decoding=decoding,
     )
 
 
 def generate_cot_with_optional_ablation(
     model, prompt, ablated_heads=None, max_cot_reasoning_tokens=1024,
-    max_answer_tokens=None, print_tokens=False, task=None,
+    max_answer_tokens=None, print_tokens=False, task=None, decoding=None,
 ):
     """
     CoT condition: the model reasons first, then answers. max_answer_tokens is
@@ -212,7 +224,7 @@ def generate_cot_with_optional_ablation(
     """
     return _generate_with_ablation(
         model, prompt, ablated_heads=ablated_heads, max_new_tokens=max_cot_reasoning_tokens,
-        print_tokens=print_tokens, task=task,
+        print_tokens=print_tokens, task=task, decoding=decoding,
     )
 
 
@@ -233,6 +245,7 @@ def run_nocot_ablation_using_curated_heads(
     task=None,
     template=None,
     checkpoint_path=None,
+    decoding=None,
 ):
     """
     Her sampled_df örneği için:
@@ -293,6 +306,7 @@ def run_nocot_ablation_using_curated_heads(
             max_new_tokens=max_new_tokens,
             print_tokens=print_tokens,
             task=task,
+            decoding=decoding,
         )
 
         normal_extracted = task.extract(normal_text)
@@ -318,6 +332,7 @@ def run_nocot_ablation_using_curated_heads(
                 max_new_tokens=max_new_tokens,
                 print_tokens=print_tokens,
                 task=task,
+                decoding=decoding,
             )
 
             ablation_extracted = task.extract(ablation_text)
@@ -345,6 +360,7 @@ def run_nocot_ablation_using_curated_heads(
                 max_new_tokens=max_new_tokens,
                 print_tokens=print_tokens,
                 task=task,
+                decoding=decoding,
             )
 
             random_extracted = task.extract(random_text)
@@ -394,6 +410,191 @@ def run_nocot_ablation_using_curated_heads(
 
 
 # ============================================================
+# 7b. DIRECT-EQUATION ABLATION
+# ============================================================
+
+def run_direct_equation_ablation_using_curated_heads(
+    sampled_df,
+    model,
+    curated_normal_results,
+    selected_heads_key="selected_heads",
+    max_examples=None,
+    max_new_tokens=2048,
+    random_seed=42,
+    print_tokens=False,
+    verbose=False,
+    task=None,
+    template=None,
+    checkpoint_path=None,
+    decoding=None,
+):
+    """
+    Direct-Equation condition: the prompt is the arithmetic alone, e.g.
+
+        "76.0 - 25.0 = The answer is "
+
+    No question text and no reasoning cue, so a head that only matters for
+    reading a word problem should be harmless here while one that computes the
+    arithmetic should not. Unlike No-CoT and CoT, the random control is
+    layer-matched: the heads selected on the CoT trace cluster in particular
+    layers, and a flat draw would confound "these heads" with "these layers".
+
+    Rows whose dataset carries no Equation column are recorded as skipped, which
+    is every task other than SVAMP.
+    """
+    task = task or get_task()
+    template = template or get_template()
+
+    heads_by_example_id = build_heads_by_example_id_from_curated(
+        curated_normal_results,
+        selected_heads_key
+    )
+
+    results = []
+    done = _load_ablation_checkpoint(checkpoint_path)
+
+    total = len(sampled_df) if max_examples is None else min(len(sampled_df), max_examples)
+    pbar = tqdm(total=total, desc="Running Direct-Equation Ablation")
+
+    count = 0
+
+    for idx, row in sampled_df.iterrows():
+        if max_examples is not None and count >= max_examples:
+            break
+
+        example_id = get_example_id_from_row(row, idx)
+        cached = done.get(str(example_id))
+        if cached is not None:
+            results.append(cached)
+            count += 1
+            pbar.update(1)
+            continue
+
+        true_ans = task.gold_from_row(row)
+        q_type = get_type_from_row(row)
+
+        equation_prompt = make_direct_equation_prompt_from_row(row, task=task)
+
+        selected_heads_list = heads_by_example_id.get(example_id, [])
+        num_heads = len(selected_heads_list)
+
+        normal_text = None
+        normal_extracted = None
+        normal_correct = None
+        ablation_text = None
+        ablation_extracted = None
+        ablation_correct = None
+        random_text = None
+        random_extracted = None
+        random_correct = None
+        random_heads_list = None
+
+        if equation_prompt is None:
+            skipped = True
+        else:
+            # ------------------------------
+            # Normal generation
+            # ------------------------------
+            normal_text = generate_with_optional_ablation(
+                model,
+                equation_prompt,
+                ablated_heads=None,
+                max_new_tokens=max_new_tokens,
+                print_tokens=print_tokens,
+                task=task,
+                decoding=decoding,
+            )
+
+            normal_extracted = task.extract(normal_text)
+            normal_correct = task.answers_equal(normal_extracted, true_ans)
+            # Same rule as No-CoT: the prompt already ends with the answer
+            # trigger and only the continuation comes back, so a row is unusable
+            # exactly when no answer can be parsed out of it.
+            skipped = normal_extracted is None
+
+            # ------------------------------
+            # Selected-head ablation
+            # ------------------------------
+            if num_heads > 0:
+                ablation_text = generate_with_optional_ablation(
+                    model,
+                    equation_prompt,
+                    ablated_heads=selected_heads_list,
+                    max_new_tokens=max_new_tokens,
+                    print_tokens=print_tokens,
+                    task=task,
+                    decoding=decoding,
+                )
+
+                ablation_extracted = task.extract(ablation_text)
+                ablation_correct = task.answers_equal(ablation_extracted, true_ans)
+
+                # ------------------------------
+                # Layer-matched random-head control
+                # ------------------------------
+                random_heads_list = sample_random_heads_matched_layers_for_example(
+                    model,
+                    selected_heads_list,
+                    seed=random_seed + count
+                )
+
+                random_text = generate_with_optional_ablation(
+                    model,
+                    equation_prompt,
+                    ablated_heads=random_heads_list,
+                    max_new_tokens=max_new_tokens,
+                    print_tokens=print_tokens,
+                    task=task,
+                    decoding=decoding,
+                )
+
+                random_extracted = task.extract(random_text)
+                random_correct = task.answers_equal(random_extracted, true_ans)
+
+        record = {
+            "example_id": example_id,
+            "Type": q_type,
+            "skipped": skipped,
+            "EquationPrompt": equation_prompt,
+            "true_answer": true_ans,
+            "selected_heads": selected_heads_list,
+            "random_heads": random_heads_list,
+            "num_heads_ablated": num_heads,
+
+            "normal_text": normal_text,
+            "normal_extracted": normal_extracted,
+            "normal_correct": normal_correct,
+
+            "ablation_text": ablation_text,
+            "ablation_extracted": ablation_extracted,
+            "ablation_correct": ablation_correct,
+
+            "random_text": random_text,
+            "random_extracted": random_extracted,
+            "random_correct": random_correct,
+
+            "correct": ablation_correct if ablation_correct is not None else False
+        }
+        results.append(record)
+        _append_ablation_checkpoint(checkpoint_path, record)
+
+        count += 1
+        pbar.update(1)
+
+        if verbose:
+            print("=" * 80)
+            print("example_id:", example_id)
+            print("prompt:", repr(equation_prompt))
+            print("true:", true_ans)
+            print("normal:", repr(normal_text), normal_extracted, normal_correct)
+            print("ablated:", repr(ablation_text), ablation_extracted, ablation_correct)
+            print("random:", repr(random_text), random_extracted, random_correct)
+
+    pbar.close()
+    return pd.DataFrame(results)
+
+
+# ============================================================
 # 8. COT ABLATION
 # ============================================================
 
@@ -411,6 +612,7 @@ def run_cot_ablation_using_curated_heads(
     task=None,
     template=None,
     checkpoint_path=None,
+    decoding=None,
 ):
     """
     Her sampled_df örneği için:
@@ -472,6 +674,7 @@ def run_cot_ablation_using_curated_heads(
             max_answer_tokens=max_answer_tokens,
             print_tokens=print_tokens,
             task=task,
+            decoding=decoding,
         )
 
         # If the unablated run never reached the trigger there is no baseline to
@@ -497,6 +700,7 @@ def run_cot_ablation_using_curated_heads(
                 max_answer_tokens=max_answer_tokens,
                 print_tokens=print_tokens,
                 task=task,
+                decoding=decoding,
             )
 
             ablation_extracted = task.extract(ablation_text)
@@ -525,6 +729,7 @@ def run_cot_ablation_using_curated_heads(
                 max_answer_tokens=max_answer_tokens,
                 print_tokens=print_tokens,
                 task=task,
+                decoding=decoding,
             )
 
             random_extracted = task.extract(random_text)

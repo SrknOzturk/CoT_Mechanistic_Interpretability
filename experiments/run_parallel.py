@@ -135,9 +135,15 @@ def _worker_main(cfg):
         template = _get_template(cfg["template"])
         name = cfg["experiment"]
 
+        from src.utils import DecodingConfig as _DecodingConfig
+
         kwargs = dict(
             df=shard_df, model=model, id_column=id_col, task=task, template=template,
             ctx=cfg["ctx"], seed=cfg["seed"], checkpoint_path=cfg["checkpoint_path"],
+            decoding=_DecodingConfig(
+                repetition_penalty=cfg["repetition_penalty"],
+                no_repeat_ngram_size=cfg["no_repeat_ngram_size"],
+            ),
         )
         if name in _rp.MULTI_OUTPUT:
             kwargs["output_paths"] = {m: None for m in _rp.MULTI_OUTPUT[name]}
@@ -310,7 +316,8 @@ def _ablation_worker_main(cfg):
     Runs in a freshly spawned process. Loads its own model, restricts the
     candidate dataframe to its shard, reloads curated_heads fresh from
     cfg["curated_heads_path"] (a completed patching run's merged results
-    file), and runs one ablation condition (No-CoT or CoT) over the shard.
+    file), and runs one ablation condition (No-CoT, CoT or Direct-Equation)
+    over the shard.
 
     Same exit-code contract as _worker_main: 0 success, OOM_EXIT_CODE on a
     CUDA OOM, 1 on anything else.
@@ -324,6 +331,7 @@ def _ablation_worker_main(cfg):
     from src.ablation import (
         load_heads_from_experiment as _load_heads,
         run_cot_ablation_using_curated_heads as _run_cot,
+        run_direct_equation_ablation_using_curated_heads as _run_equation,
         run_nocot_ablation_using_curated_heads as _run_nocot,
     )
     from src.tasks import get_task as _get_task
@@ -345,9 +353,23 @@ def _ablation_worker_main(cfg):
         task = _get_task(cfg["dataset"])
         template = _get_template(cfg["template"])
 
-        runner = _run_nocot if cfg["condition"] == "NoCoT" else _run_cot
+        from src.utils import DecodingConfig as _DecodingConfig
+
+        runner = {
+            "NoCoT": _run_nocot,
+            "CoT": _run_cot,
+            "DirectEquation": _run_equation,
+        }[cfg["condition"]]
+        # CoT names its token budget differently from the other two conditions
+        budget_key = ("max_cot_reasoning_tokens" if cfg["condition"] == "CoT"
+                      else "max_new_tokens")
         runner(shard_df, model, curated_heads, task=task, template=template,
-              checkpoint_path=cfg["checkpoint_path"])
+              checkpoint_path=cfg["checkpoint_path"],
+              decoding=_DecodingConfig(
+                  repetition_penalty=cfg["repetition_penalty"],
+                  no_repeat_ngram_size=cfg["no_repeat_ngram_size"],
+              ),
+              **{budget_key: cfg["ablation_max_new_tokens"]})
         _sys.exit(0)
 
     except Exception as exc:  # noqa: BLE001 -- classify and report, don't swallow
@@ -398,6 +420,9 @@ def _run_ablation_workers_until_processed(label, args, ids, id_column, data_path
                 template=args.template, id_column=id_column, condition=condition,
                 checkpoint_path=ckpt_path, shard_ids=shard_ids,
                 data_path=data_path, curated_heads_path=curated_heads_path,
+                ablation_max_new_tokens=args.ablation_max_new_tokens,
+                repetition_penalty=args.repetition_penalty,
+                no_repeat_ngram_size=args.no_repeat_ngram_size,
             )
             p = ctx.Process(target=_ablation_worker_main, args=(cfg,), name=f"{label}-w{i}")
             p.start()
@@ -449,8 +474,12 @@ def run_ablation_parallel(args, task, template, curated_heads_path, id_column, d
     ckpt_dir = os.path.join(out_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
 
+    conditions = ["NoCoT", "CoT"]
+    if getattr(args, "equation_ablation", False):
+        conditions.append("DirectEquation")
+
     summary = []
-    for condition in ("NoCoT", "CoT"):
+    for condition in conditions:
         base = f"{stem}__{condition}"
         if args.fresh:
             removed = 0
@@ -529,6 +558,8 @@ def _run_workers_until_processed(name, args, ids, id_column, data_path, ckpt_dir
                 ctx=args.ctx, heads_per_pos=args.heads_per_pos, max_steps=args.max_steps,
                 seed=args.seed, checkpoint_path=ckpt_path, shard_ids=shard_ids,
                 data_path=data_path, reference_json_path=ref_path,
+                repetition_penalty=args.repetition_penalty,
+                no_repeat_ngram_size=args.no_repeat_ngram_size,
             )
             p = ctx.Process(target=_worker_main, args=(cfg,), name=f"{name}-w{i}")
             p.start()
@@ -705,9 +736,22 @@ def main():
                          "--target-n primary + reserve (default: use the whole file)")
     ap.add_argument("--ctx", type=int, default=2048)
     ap.add_argument("--heads-per-pos", type=int, default=3)
-    ap.add_argument("--max-steps", type=int, default=1024)
+    ap.add_argument("--max-steps", type=int, default=1024,
+                    help="patching: cap on reasoning steps swept per example (default: 1024)")
+    ap.add_argument("--ablation-max-new-tokens", type=int, default=2048,
+                    help="ablation: token budget per generated trajectory (default: 2048)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out-dir", default=rp.RESULTS_DIR)
+
+    # Decoding penalties, inactive by default so SVAMP results stay reproducible.
+    # Base models fall into verbatim loops on ProntoQA's long deductive prompts,
+    # and a looping trace never reaches the answer trigger -- the example is then
+    # discarded as a skip rather than measured.
+    ap.add_argument("--repetition-penalty", type=float, default=1.0,
+                    help="divide already-generated tokens' logits by this (1.0 = off)")
+    ap.add_argument("--no-repeat-ngram-size", type=int, default=0,
+                    help="ban repeating any n-gram of this size within the generated text "
+                         "(0 = off)")
 
     ap.add_argument("--workers", type=int, default=None,
                     help="worker process count; omit to size automatically from GPU memory")
@@ -720,6 +764,9 @@ def main():
     ap.add_argument("--no-ablation", dest="ablation", action="store_false", default=True,
                     help="skip the automatic No-CoT/CoT ablation run that otherwise follows "
                          "each completed normal or random-activation patching experiment")
+    ap.add_argument("--equation-ablation", action="store_true",
+                    help="also run the Direct-Equation ablation condition (SVAMP only: it "
+                         "needs the Equation column)")
     ap.add_argument("--fresh", action="store_true",
                     help="discard existing checkpoints for the requested experiments and start over")
     ap.add_argument("--dry-run", action="store_true",
@@ -744,6 +791,10 @@ def main():
     missing = [c for c in (template.cot_col, template.nocot_col, id_column) if c not in df.columns]
     if missing:
         print(f"[ERROR] missing column(s) {missing}; re-run prepare_dataset.py")
+        sys.exit(1)
+    if args.equation_ablation and "Equation" not in df.columns:
+        print(f"[ERROR] --equation-ablation needs an 'Equation' column, which "
+              f"{args.dataset} does not have")
         sys.exit(1)
 
     all_ids = [str(x) for x in df[id_column].tolist()]

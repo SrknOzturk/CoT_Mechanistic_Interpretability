@@ -60,6 +60,7 @@ def multi_head_patching_with_margin_difference(
     seed=42,
     task=None,
     template=None,
+    decoding=None,
 ):
     """
     Performs the multi-head patching experiment for each example in the given DataFrame.
@@ -85,7 +86,7 @@ def multi_head_patching_with_margin_difference(
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
 
         full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-            model, cot_prompt_for_reference, task=task
+            model, cot_prompt_for_reference, task=task, decoding=decoding
         )
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
@@ -154,7 +155,8 @@ def multi_head_patching_with_margin_difference(
                 "hm_matrix": hm_ld_cpu.tolist()
             })
 
-            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task)
+            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task,
+                                                decoding=decoding)
             step += 1
 
         merged_ld_norm = {}
@@ -250,6 +252,7 @@ def multi_head_patching_with_jsd_metric(
     seed=42,
     task=None,
     template=None,
+    decoding=None,
 ):
     """
     Performs the multi-head patching experiment specifically for the JSD metric.
@@ -274,7 +277,7 @@ def multi_head_patching_with_jsd_metric(
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
 
         full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-            model, cot_prompt_for_reference, task=task
+            model, cot_prompt_for_reference, task=task, decoding=decoding
         )
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
@@ -347,7 +350,8 @@ def multi_head_patching_with_jsd_metric(
                 "hm_matrix": hm_ld_cpu.tolist()
             })
 
-            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task)
+            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task,
+                                                decoding=decoding)
             step += 1
 
         merged_ld_norm = {}
@@ -449,6 +453,7 @@ def multi_head_cross_patching_with_margin_metric(
     seed=42,
     task=None,
     template=None,
+    decoding=None,
 ):
     """
     Performs the multi-head cross-patching experiment.
@@ -485,7 +490,7 @@ def multi_head_cross_patching_with_margin_metric(
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
 
         full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-            model, cot_prompt_for_reference, task=task
+            model, cot_prompt_for_reference, task=task, decoding=decoding
         )
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
@@ -555,7 +560,8 @@ def multi_head_cross_patching_with_margin_metric(
                 "hm_matrix": hm_ld_cpu.tolist()
             })
 
-            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task)
+            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task,
+                                                decoding=decoding)
             step += 1
 
         merged_ld_norm = {}
@@ -652,6 +658,7 @@ def multi_head_cross_patching_with_jsd_metric(
     seed=42,
     task=None,
     template=None,
+    decoding=None,
 ):
     """
     Performs the multi-head cross-patching experiment specifically for the JSD metric.
@@ -687,7 +694,7 @@ def multi_head_cross_patching_with_jsd_metric(
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
 
         full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-            model, cot_prompt_for_reference, task=task
+            model, cot_prompt_for_reference, task=task, decoding=decoding
         )
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
@@ -757,7 +764,8 @@ def multi_head_cross_patching_with_jsd_metric(
                 "hm_matrix": hm_ld_cpu.tolist()
             })
 
-            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task)
+            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task,
+                                                decoding=decoding)
             step += 1
 
         merged_ld_norm = {}
@@ -858,6 +866,7 @@ def sequential_random_patching_margin(
     task=None,
     template=None,
     checkpoint_path=None,
+    decoding=None,
 ):
     """
     Algorithm 4: Random Activation Patching (Margin Recovery Metric)
@@ -917,7 +926,7 @@ def sequential_random_patching_margin(
 
         try:
             full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-                model, cot_prompt, task=task)
+                model, cot_prompt, task=task, decoding=decoding)
         except AnswerTriggerNotFound as exc:
             rec = skipped_record(example_id, str(exc))
             json_export_data.append(rec)
@@ -1041,6 +1050,7 @@ def sequential_random_patching_jsd(
     task=None,
     template=None,
     checkpoint_path=None,
+    decoding=None,
 ):
     """
     Algorithm 4: Random Activation Patching (JSD Metric)
@@ -1078,7 +1088,7 @@ def sequential_random_patching_jsd(
 
         try:
             full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-                model, cot_prompt, task=task)
+                model, cot_prompt, task=task, decoding=decoding)
         except AnswerTriggerNotFound as exc:
             rec = skipped_record(example_id, str(exc))
             json_export_data.append(rec)
@@ -1264,6 +1274,7 @@ def sequential_random_patching_dual_metric(
     task=None,
     template=None,
     checkpoint_path=None,
+    decoding=None,
 ):
     """
     Random-Gaussian control, scoring margin and JSD from one sweep.
@@ -1337,7 +1348,7 @@ def sequential_random_patching_dual_metric(
 
         try:
             full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-                model, cot_prompt, task=task)
+                model, cot_prompt, task=task, decoding=decoding)
         except AnswerTriggerNotFound as exc:
             skip = {name: skipped_record(example_id, str(exc)) for name in METRICS}
             for name in METRICS:
@@ -1485,6 +1496,7 @@ def multi_head_patching_dual_metric(
     task=None,
     template=None,
     checkpoint_path=None,
+    decoding=None,
 ):
     """
     One sequential scan of the CoT trace that scores margin and JSD together.
@@ -1543,7 +1555,7 @@ def multi_head_patching_dual_metric(
         # example is recorded as skipped rather than analysed on a partial trace.
         try:
             full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-                model, cot_prompt, task=task
+                model, cot_prompt, task=task, decoding=decoding
             )
         except AnswerTriggerNotFound as exc:
             skip = {name: skipped_record(example_id, str(exc)) for name in METRICS}
@@ -1618,7 +1630,8 @@ def multi_head_patching_dual_metric(
                 })
 
             del clean_cache_ld
-            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task)
+            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task,
+                                                decoding=decoding)
             step += 1
 
         # one joint patch and one record per metric
