@@ -7,6 +7,7 @@ rows in place while leaving CoT rows untouched.
 
 import argparse
 import glob
+import json
 import os
 
 import pandas as pd
@@ -27,6 +28,26 @@ def true_count(series):
     if series.dtype == bool:
         return int(series.sum())
     return int(series.fillna(False).astype(str).str.lower().eq("true").sum())
+
+
+def repair_checkpoints(abdir, stem):
+    repaired = 0
+    pattern = os.path.join(abdir, "checkpoints", f"{stem}__NoCoT.attempt*.worker*.jsonl")
+    for path in glob.glob(pattern):
+        rows = []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                row["skipped"] = row.get("normal_extracted") is None
+                rows.append(row)
+        with open(path, "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        repaired += 1
+    return repaired
 
 
 def main():
@@ -50,6 +71,7 @@ def main():
         usable = df[~df["skipped"]]
 
         stem = os.path.basename(path).removesuffix("__ablation_NoCoT.csv")
+        checkpoint_count = repair_checkpoints(abdir, stem)
         summary_path = os.path.join(abdir, f"{stem}__ablation_summary.csv")
         if os.path.exists(summary_path):
             summary = pd.read_csv(summary_path)
@@ -64,7 +86,8 @@ def main():
         print(f"{os.path.basename(path)}: skipped {old} -> {int(df.skipped.sum())}; "
               f"normal={accuracy(usable, 'normal_correct'):.2f}% "
               f"ablated={accuracy(usable, 'ablation_correct'):.2f}% "
-              f"random={accuracy(usable, 'random_correct'):.2f}%")
+              f"random={accuracy(usable, 'random_correct'):.2f}% "
+              f"checkpoints={checkpoint_count}")
 
 
 if __name__ == "__main__":
