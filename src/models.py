@@ -39,7 +39,7 @@ class ModelSpec:
 MODELS: Dict[str, ModelSpec] = {
     "qwen2.5-0.5b": ModelSpec(
         key="qwen2.5-0.5b",
-        tl_name="qwen2.5-0.5b",
+        tl_name="Qwen/Qwen2.5-0.5B",
         n_layers=24, n_heads=14, d_model=896, d_vocab=151936, n_params=0.494e9,
         note="base model of the submitted version; produces CoT only when prompted",
     ),
