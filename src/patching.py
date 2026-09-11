@@ -9,6 +9,8 @@ from collections import defaultdict
 from typing import Callable, List, Tuple, Any
 from transformer_lens import HookedTransformer
 
+from src.utils import logits_from_final_residual
+
 
 def patch_attn_head_out_last_pos(
     model: HookedTransformer,
@@ -92,19 +94,28 @@ def patch_attn_head_out_last_pos(
             # Build the concrete hook name for this layer
             hook_name = hook_name_template.format(layer=layer)
 
-            # Run the model once with this single hook active
+            # Run the model once with this single hook active, stopping before
+            # the unembed. Every metric reads logits[0, -1, :] only, so
+            # unembedding the whole sequence into a 152k-token vocabulary --
+            # once per head, so n_layers*n_heads times per token step, on a
+            # sequence that grows with the trace -- was the dominant cost here
+            # and made long traces run out of memory outright.
             with torch.no_grad():
-                logits = model.run_with_hooks(
+                residual = model.run_with_hooks(
                     corrupted_tokens,
                     fwd_hooks=[(hook_name, hook_fn)],
-                    return_type="logits"
+                    return_type=None,
+                    stop_at_layer=n_layers,
                 )
+                logits = logits_from_final_residual(model, residual)
+                del residual
 
             # Score every metric from this one forward pass
             if normalize:
                 logits = (logits - logits.mean()) / logits.std()
             for name, fn in metric_fns.items():
                 scores[name][layer, head] = fn(logits)
+            del logits
 
     return scores["_"] if single else scores
 

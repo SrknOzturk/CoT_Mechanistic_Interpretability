@@ -269,6 +269,38 @@ def apply_decoding_penalties(logits, generated_ids, decoding=None):
     return logits
 
 
+def logits_from_final_residual(model, residual):
+    """
+    Applies the final norm and unembed to the last sequence position only.
+
+    Exactly equivalent to unembedding every position and then keeping the last
+    one, because both operations are position-wise. Returns [batch, 1, d_vocab],
+    so callers that index ``[0, -1, :]`` keep working unchanged.
+    """
+    final_residual = residual[:, -1:, :]
+    if model.cfg.normalization_type is not None:
+        final_residual = model.ln_final(final_residual)
+    logits = model.unembed(final_residual)
+    if model.cfg.output_logits_soft_cap > 0.0:
+        logits = model.cfg.output_logits_soft_cap * torch.tanh(
+            logits / model.cfg.output_logits_soft_cap
+        )
+    return logits
+
+
+def last_position_logits(model, tokens):
+    """
+    Runs the transformer but unembeds only its final sequence position.
+
+    ``HookedTransformer.forward`` normally unembeds every position into the full
+    vocabulary. Both the generation loops and the patching metrics read the
+    final position only, and with Qwen's 152k-token vocabulary the discarded
+    logits grow with the trace until the unembed matmul alone exhausts VRAM.
+    """
+    residual = model(tokens, return_type=None, stop_at_layer=model.cfg.n_layers)
+    return logits_from_final_residual(model, residual)[0, -1, :]
+
+
 def _strip_bos(model, text: str) -> str:
     """
     Removes the leading BOS marker from a decoded sequence.

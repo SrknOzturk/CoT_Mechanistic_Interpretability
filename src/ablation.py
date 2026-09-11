@@ -35,6 +35,7 @@ from src.utils import (
     build_heads_by_example_id_from_curated,
     get_example_id_from_row,
     get_type_from_row,
+    last_position_logits,
     make_cot_prompt_from_row,
     make_direct_equation_prompt_from_row,
     make_nocot_prompt_from_row,
@@ -82,32 +83,6 @@ def _append_ablation_checkpoint(path, record):
 # ============================================================
 # Generation under ablation
 # ============================================================
-
-def _last_position_logits(model, tokens):
-    """Run the transformer but unembed only its final sequence position.
-
-    ``HookedTransformer.forward`` normally unembeds every position into the
-    full vocabulary.  Autoregressive generation only reads the final position,
-    and Qwen's 152k-token vocabulary makes the unused logits increasingly large
-    as the generated trace grows.  Stopping after the last transformer block,
-    slicing the residual, then applying the same final norm and unembed is
-    exactly equivalent because both operations are position-wise.
-    """
-    residual = model(
-        tokens,
-        return_type=None,
-        stop_at_layer=model.cfg.n_layers,
-    )
-    final_residual = residual[:, -1:, :]
-    if model.cfg.normalization_type is not None:
-        final_residual = model.ln_final(final_residual)
-    logits = model.unembed(final_residual)
-    if model.cfg.output_logits_soft_cap > 0.0:
-        logits = model.cfg.output_logits_soft_cap * torch.tanh(
-            logits / model.cfg.output_logits_soft_cap
-        )
-    return logits[0, -1, :]
-
 
 def _generate_with_ablation(
     model,
@@ -161,7 +136,7 @@ def _generate_with_ablation(
             # phase 1 -- reason until the answer trigger
             current_text = _decode(model, output_tokens)
             while not task.ends_reasoning(current_text) and generated < max_new_tokens:
-                logits = _last_position_logits(model, output_tokens[:, -context_window:])
+                logits = last_position_logits(model, output_tokens[:, -context_window:])
                 step_logits = apply_decoding_penalties(logits, generated_ids, decoding)
                 next_token = step_logits.argmax(dim=-1, keepdim=True)
                 output_tokens = _append_token(output_tokens, next_token)
@@ -180,7 +155,7 @@ def _generate_with_ablation(
 
             # phase 2 -- collect the answer tokens
             while generated < max_new_tokens:
-                logits = _last_position_logits(model, output_tokens[:, -context_window:])
+                logits = last_position_logits(model, output_tokens[:, -context_window:])
                 next_token = logits.argmax(dim=-1, keepdim=True)
                 del logits
                 token_str = _decode_single_token(model, next_token)
