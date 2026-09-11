@@ -62,6 +62,32 @@ def patch_attn_head_out_last_pos(
     # Choose the correct hook name for the attention head OUTPUT ("z") in TransformerLens.
     hook_name_template = "blocks.{layer}.attn.hook_z"
 
+    # Patching hook_z at layer L leaves blocks 0..L-1 untouched, so their output
+    # is the same for every head of every layer in the sweep. Capture the
+    # residual entering each block once from the unpatched run, and let each
+    # sweep pass resume from there: a pass then runs n_layers-L blocks instead
+    # of all n_layers, which halves the sweep's work on average.
+    #
+    # Safe because this sweep is batch-1 and unpadded (patching_pipeline's
+    # `padding` is off, and nothing enables it), so there is no attention mask
+    # to reconstruct from tokens we are no longer passing.
+    resid_pre = {}
+
+    def make_capture(idx):
+        def capture(value, hook):
+            resid_pre[idx] = value.clone()
+            return value
+        return capture
+
+    with torch.no_grad():
+        model.run_with_hooks(
+            corrupted_tokens,
+            fwd_hooks=[(f"blocks.{idx}.hook_resid_pre", make_capture(idx))
+                       for idx in range(n_layers)],
+            return_type=None,
+            stop_at_layer=n_layers,
+        )
+
     # Sweep over all layers and heads, patching one head at a time
     for layer in range(n_layers):
         for head in range(n_heads):
@@ -94,17 +120,18 @@ def patch_attn_head_out_last_pos(
             # Build the concrete hook name for this layer
             hook_name = hook_name_template.format(layer=layer)
 
-            # Run the model once with this single hook active, stopping before
-            # the unembed. Every metric reads logits[0, -1, :] only, so
-            # unembedding the whole sequence into a 152k-token vocabulary --
-            # once per head, so n_layers*n_heads times per token step, on a
-            # sequence that grows with the trace -- was the dominant cost here
-            # and made long traces run out of memory outright.
+            # Resume from this layer's cached prefix and stop before the unembed.
+            # Every metric reads logits[0, -1, :] only, so unembedding the whole
+            # sequence into a 152k-token vocabulary -- once per head, so
+            # n_layers*n_heads times per token step, on a sequence that grows
+            # with the trace -- was the dominant cost here and made long traces
+            # run out of memory outright.
             with torch.no_grad():
                 residual = model.run_with_hooks(
-                    corrupted_tokens,
+                    resid_pre[layer],
                     fwd_hooks=[(hook_name, hook_fn)],
                     return_type=None,
+                    start_at_layer=layer,
                     stop_at_layer=n_layers,
                 )
                 logits = logits_from_final_residual(model, residual)
