@@ -88,6 +88,8 @@ def complete(args):
                 cmd += ["--workers", str(args.workers)]
             if args.gpu_total_gb is not None:
                 cmd += ["--gpu-total-gb", str(args.gpu_total_gb)]
+            if args.equation_ablation:
+                cmd += ["--equation-ablation"]
             run(cmd)
 
 
@@ -107,6 +109,11 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--workers", type=int)
     ap.add_argument("--gpu-total-gb", type=float)
+    ap.add_argument(
+        "--equation-ablation",
+        action="store_true",
+        help="also run Direct-Equation ablation for SVAMP",
+    )
     args = ap.parse_args()
     if args.stage in ("prepare", "all"):
         prepare(args)
