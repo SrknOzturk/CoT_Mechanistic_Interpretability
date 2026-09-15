@@ -11,9 +11,11 @@ same interface, whatever the task:
     PromptWithCot__<tpl>    clean side of the patching pair
     PromptWithoutCot__<tpl> corrupted side (before the answer trigger is appended)
 
-Following the original design, the CoT demonstration is a single fixed exemplar
-shared by every row, while the No-CoT demonstration is drawn per row from the
-dataset itself, matched on the task's grouping key.
+SVAMP preserves the original design: the CoT demonstration is one fixed
+exemplar, while the No-CoT demonstration is drawn per row and matched on the
+operation type.  ProntoQA uses one fixed exemplar on both sides so that the
+clean/corrupted pair differs in reasoning content rather than demonstration
+identity.
 """
 
 import json
@@ -156,14 +158,14 @@ def curate_prontoqa_and_save_json(
             demo = item.get("in_context_example0")
 
             question = _collapse(f"{test['question']} {test['query']}")
-            demo_fields = None
             if demo is not None:
                 demo_fields = {
                     "question": _collapse(f"{demo['question']} {demo['query']}"),
                     "reasoning": " ".join(demo["chain_of_thought"]),
                     "answer": str(demo["answer"]),
                 }
-                # the first in-context example becomes the shared CoT exemplar
+                # The first in-context example becomes the shared exemplar for
+                # both the CoT and No-CoT sides.
                 if cot_demo is None:
                     cot_demo = demo_fields
 
@@ -173,14 +175,16 @@ def curate_prontoqa_and_save_json(
                 "PromptWithoutExample": question,
                 "Answer": str(test["answer"]),
                 "ChainOfThought": " ".join(test["chain_of_thought"]),
-                "_nocot_demo": demo_fields,
             })
 
     if cot_demo is None:
         raise ValueError("no in-context example found; regenerate with --few-shot-examples 1")
 
     df = pd.DataFrame(records)
-    nocot_demos = [d if d is not None else cot_demo for d in df.pop("_nocot_demo")]
+    # Keep the 1-shot demonstration identical across the clean CoT and corrupt
+    # No-CoT prompts.  Only the reasoning cue/trace is removed on the No-CoT
+    # side; changing the exemplar as well would confound activation patching.
+    nocot_demos = [cot_demo] * len(df)
     df = _add_prompt_columns(df, cot_demo, nocot_demos, templates)
 
     df.to_json(output_path, orient="records", indent=4)
@@ -225,10 +229,16 @@ def create_and_save_balanced_subset(
     if not keys:
         raise ValueError(f"none of {tuple(stratify_keys)} present; have {list(df.columns)}")
 
-    sampled = (
-        df.groupby(list(keys), group_keys=False)
-          .apply(lambda g: g.sample(n=min(len(g), n_samples), random_state=random_state))
-          .reset_index(drop=True)
+    # pandas 3 no longer includes grouping columns in DataFrameGroupBy.apply's
+    # group frames.  Concatenating samples from the groups directly keeps the
+    # stratification columns in the persisted candidate pool on every supported
+    # pandas version.
+    sampled = pd.concat(
+        [
+            group.sample(n=min(len(group), n_samples), random_state=random_state)
+            for _, group in df.groupby(list(keys), sort=True, dropna=False)
+        ],
+        ignore_index=True,
     )
     sampled.to_json(output_json_path, orient="records", indent=4)
     print(f"Balanced subset: {len(sampled)} examples "

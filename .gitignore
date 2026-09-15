@@ -14,5 +14,6 @@ prontoqa-main/
 
 # Local scratch
 *.log
+.nltk_data/
 .ipynb_checkpoints/
 .DS_Store

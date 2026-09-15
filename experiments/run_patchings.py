@@ -86,7 +86,8 @@ def multi_head_patching_with_margin_difference(
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
 
         full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-            model, cot_prompt_for_reference, task=task, decoding=decoding
+            model, cot_prompt_for_reference, max_new_tokens=max_generation_steps,
+            task=task, decoding=decoding
         )
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
@@ -277,7 +278,8 @@ def multi_head_patching_with_jsd_metric(
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
 
         full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-            model, cot_prompt_for_reference, task=task, decoding=decoding
+            model, cot_prompt_for_reference, max_new_tokens=max_generation_steps,
+            task=task, decoding=decoding
         )
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
@@ -490,7 +492,8 @@ def multi_head_cross_patching_with_margin_metric(
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
 
         full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-            model, cot_prompt_for_reference, task=task, decoding=decoding
+            model, cot_prompt_for_reference, max_new_tokens=max_generation_steps,
+            task=task, decoding=decoding
         )
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
@@ -694,7 +697,8 @@ def multi_head_cross_patching_with_jsd_metric(
         no_cot_prompt_last_token = no_cot_prompt + template.corrupt_suffix
 
         full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-            model, cot_prompt_for_reference, task=task, decoding=decoding
+            model, cot_prompt_for_reference, max_new_tokens=max_generation_steps,
+            task=task, decoding=decoding
         )
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
@@ -926,7 +930,8 @@ def sequential_random_patching_margin(
 
         try:
             full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-                model, cot_prompt, task=task, decoding=decoding)
+                model, cot_prompt, max_new_tokens=max_generation_steps,
+                task=task, decoding=decoding)
         except AnswerTriggerNotFound as exc:
             rec = skipped_record(example_id, str(exc))
             json_export_data.append(rec)
@@ -1088,7 +1093,8 @@ def sequential_random_patching_jsd(
 
         try:
             full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-                model, cot_prompt, task=task, decoding=decoding)
+                model, cot_prompt, max_new_tokens=max_generation_steps,
+                task=task, decoding=decoding)
         except AnswerTriggerNotFound as exc:
             rec = skipped_record(example_id, str(exc))
             json_export_data.append(rec)
@@ -1348,7 +1354,8 @@ def sequential_random_patching_dual_metric(
 
         try:
             full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-                model, cot_prompt, task=task, decoding=decoding)
+                model, cot_prompt, max_new_tokens=max_generation_steps,
+                task=task, decoding=decoding)
         except AnswerTriggerNotFound as exc:
             skip = {name: skipped_record(example_id, str(exc)) for name in METRICS}
             for name in METRICS:
@@ -1555,7 +1562,8 @@ def multi_head_patching_dual_metric(
         # example is recorded as skipped rather than analysed on a partial trace.
         try:
             full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
-                model, cot_prompt, task=task, decoding=decoding
+                model, cot_prompt, max_new_tokens=max_generation_steps,
+                task=task, decoding=decoding
             )
         except AnswerTriggerNotFound as exc:
             skip = {name: skipped_record(example_id, str(exc)) for name in METRICS}

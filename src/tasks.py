@@ -152,7 +152,16 @@ class TaskSpec:
         return (self.answer_trigger,) + tuple(self.answer_trigger_alts)
 
     def ends_reasoning(self, text: str) -> bool:
-        return any(text.endswith(t) for t in self.triggers)
+        # Tokenizers disagree about where the space following ``is`` belongs.
+        # Qwen can decode the pre-answer boundary as ``The answer is ``, while
+        # OLMo decodes the same boundary as ``The answer is`` and puts the
+        # leading space on the subsequent `` True`` / `` False`` token.  Match
+        # both representations so the stopping rule is tokenizer-independent
+        # and logits are still captured immediately before the answer token.
+        return any(
+            text.endswith(trigger) or text.endswith(trigger.rstrip())
+            for trigger in self.triggers
+        )
 
     def answer_segment(self, text: str) -> str:
         """
