@@ -362,10 +362,12 @@ def generate_till_answer(model, prompt: str, max_new_tokens: int = 1024, task=No
 
 
 def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int = 1024, task=None,
-                                        decoding=None):
+                                        decoding=None, return_generation_steps=False,
+                                        return_generation_trace=False):
     """
     Generates the full answer using a CoT prompt and returns the logits of the first
-    token immediately following 'The answer is '.
+    token immediately following 'The answer is '. When requested, also returns
+    the number of tokens generated through the answer trigger.
     """
     task = task or get_task()
     device = next(model.parameters()).device
@@ -415,6 +417,10 @@ def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int 
     else:
         full_answer_text = _strip_bos(model, full_text)
 
+    if return_generation_trace:
+        return full_answer_text, answer_token_logits, tuple(generated_ids)
+    if return_generation_steps:
+        return full_answer_text, answer_token_logits, len(generated_ids)
     return full_answer_text, answer_token_logits
 
 

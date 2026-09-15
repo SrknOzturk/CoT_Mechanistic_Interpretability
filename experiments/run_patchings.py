@@ -1353,9 +1353,9 @@ def sequential_random_patching_dual_metric(
         no_cot_prompt_last_token = row[template.nocot_col] + template.corrupt_suffix
 
         try:
-            full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
+            full_answer_text, clean_reference_logits, generation_steps = generate_full_answer_and_get_logits(
                 model, cot_prompt, max_new_tokens=max_generation_steps,
-                task=task, decoding=decoding)
+                task=task, decoding=decoding, return_generation_steps=True)
         except AnswerTriggerNotFound as exc:
             skip = {name: skipped_record(example_id, str(exc)) for name in METRICS}
             for name in METRICS:
@@ -1363,6 +1363,9 @@ def sequential_random_patching_dual_metric(
             _append_checkpoint(checkpoint_path, {"example_id": example_id, **skip})
             tqdm.write(f"-> {example_id} | SKIPPED: {exc}")
             continue
+
+        tqdm.write(f"-> {example_id} | generated {generation_steps} CoT tokens; "
+                   "starting random patching...")
 
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
@@ -1561,9 +1564,9 @@ def multi_head_patching_dual_metric(
         # target is the answer token there. No trigger means neither exists, so the
         # example is recorded as skipped rather than analysed on a partial trace.
         try:
-            full_answer_text, clean_reference_logits = generate_full_answer_and_get_logits(
+            full_answer_text, clean_reference_logits, generation_trace = generate_full_answer_and_get_logits(
                 model, cot_prompt, max_new_tokens=max_generation_steps,
-                task=task, decoding=decoding
+                task=task, decoding=decoding, return_generation_trace=True
             )
         except AnswerTriggerNotFound as exc:
             skip = {name: skipped_record(example_id, str(exc)) for name in METRICS}
@@ -1572,6 +1575,10 @@ def multi_head_patching_dual_metric(
             _append_checkpoint(checkpoint_path, {"example_id": example_id, **skip})
             tqdm.write(f"-> {example_id} | SKIPPED: {exc}")
             continue
+
+        generation_steps = len(generation_trace)
+        tqdm.write(f"-> {example_id} | generated {generation_steps} CoT tokens; "
+                   "starting patching...")
 
         t_true = int(clean_reference_logits.argmax(dim=-1).item())
 
@@ -1588,29 +1595,30 @@ def multi_head_patching_dual_metric(
         clean_cot_t_true_prob = F.softmax(clean_reference_logits, dim=-1)[t_true].item()
         clean_no_cot_jsd = bound["jsd"](clean_reference_logits)(no_cot_logits).item()
 
-        prompt_ld = cot_prompt
+        clean_prefix_tokens = model.to_tokens(
+            cot_prompt, prepend_bos=True).to(device)
         banks = {name: {} for name in METRICS}
         pos_hms = {name: defaultdict(list) for name in METRICS}
         token_level = {name: [] for name in METRICS}
         step = 0
 
-        while not task.ends_reasoning(prompt_ld) and step < max_generation_steps:
+        while step < generation_steps:
             # ONE sweep, scored under both metrics
             hms = patching_pipeline(
                 model,
-                prompt_ld,
-                no_cot_prompt_last_token,
+                clean_prefix_tokens,
+                corrupted_tokens,
                 metric=bound,
                 patching_function=patch_attn_head_out_last_pos,
                 clean_reference_logits=clean_reference_logits,
             )
 
-            prompt_tokens_ld = model.to_tokens(prompt_ld)
-            last_token_id = prompt_tokens_ld[0, -1].item()
-            last_token_str = model.to_string(prompt_tokens_ld[:, -1:])[0].strip()
+            last_token_id = clean_prefix_tokens[0, -1].item()
+            last_token_str = model.to_string(
+                clean_prefix_tokens[:, -1:])[0].strip()
             pos_label = nltk.pos_tag([last_token_str] if last_token_str else ["."])[0][1]
 
-            clean_tokens_ld = model.to_tokens(prompt_ld)[:, -ctx:].to(device)
+            clean_tokens_ld = clean_prefix_tokens[:, -ctx:]
             with torch.no_grad():
                 _, clean_cache_ld = model.run_with_cache(clean_tokens_ld)
 
@@ -1638,8 +1646,11 @@ def multi_head_patching_dual_metric(
                 })
 
             del clean_cache_ld
-            _, prompt_ld = generate_till_answer(model, prompt_ld, max_new_tokens=1, task=task,
-                                                decoding=decoding)
+            next_token = torch.tensor(
+                [[generation_trace[step]]], dtype=clean_prefix_tokens.dtype,
+                device=device)
+            clean_prefix_tokens = torch.cat(
+                [clean_prefix_tokens, next_token], dim=1)
             step += 1
 
         # one joint patch and one record per metric

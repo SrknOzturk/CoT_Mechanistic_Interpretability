@@ -12,8 +12,8 @@ from transformer_lens import HookedTransformer
 
 def patching_pipeline(
     model: HookedTransformer,
-    clean_prompts: Union[str, List[str]],
-    corrupted_prompts: Union[str, List[str]],
+    clean_prompts: Union[str, List[str], torch.Tensor],
+    corrupted_prompts: Union[str, List[str], torch.Tensor],
     patching_function: Callable = None,
     metric: Callable = None,
     padding: bool = False,
@@ -28,10 +28,11 @@ def patching_pipeline(
     ----------
     model : HookedTransformer
         TransformerLens-compatible model.
-    clean_prompts : str | list[str]
-        Clean input prompt(s).
-    corrupted_prompts : str | list[str]
-        Corrupted input prompt(s), same length as clean_prompts.
+    clean_prompts : str | list[str] | torch.Tensor
+        Clean input prompt(s), or an exact token tensor shaped [batch, seq].
+    corrupted_prompts : str | list[str] | torch.Tensor
+        Corrupted input prompt(s), or an exact token tensor, with the same batch
+        size as clean_prompts.
     patching_function : Callable, optional
         Signature: patching_function(model, corrupted_tokens, clean_cache, metric_fn) -> torch.Tensor [L, H]
         Defaults to `patch_attn_head_out_last_pos` if not provided.
@@ -55,9 +56,9 @@ def patching_pipeline(
     model.reset_hooks()
     model.eval()
 
-    if isinstance(clean_prompts, str):
+    if isinstance(clean_prompts, str) or torch.is_tensor(clean_prompts):
         clean_prompts = [clean_prompts]
-    if isinstance(corrupted_prompts, str):
+    if isinstance(corrupted_prompts, str) or torch.is_tensor(corrupted_prompts):
         corrupted_prompts = [corrupted_prompts]
 
     assert len(clean_prompts) == len(corrupted_prompts), \
@@ -87,8 +88,14 @@ def patching_pipeline(
         for clean_prompt, corrupted_prompt in zip(clean_prompts, corrupted_prompts):
 
             # Tokenize both inputs and truncate to last `ctx` tokens
-            clean_tokens = model.to_tokens(clean_prompt)
-            corrupted_tokens = model.to_tokens(corrupted_prompt)
+            clean_tokens = (clean_prompt if torch.is_tensor(clean_prompt)
+                            else model.to_tokens(clean_prompt))
+            corrupted_tokens = (corrupted_prompt if torch.is_tensor(corrupted_prompt)
+                                 else model.to_tokens(corrupted_prompt))
+            if clean_tokens.ndim == 1:
+                clean_tokens = clean_tokens.unsqueeze(0)
+            if corrupted_tokens.ndim == 1:
+                corrupted_tokens = corrupted_tokens.unsqueeze(0)
 
             if padding:
                 clean_len = len(clean_tokens[0])
