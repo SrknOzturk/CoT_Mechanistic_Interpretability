@@ -871,6 +871,7 @@ def sequential_random_patching_margin(
     template=None,
     checkpoint_path=None,
     decoding=None,
+    max_generation_steps=1024,
 ):
     """
     Algorithm 4: Random Activation Patching (Margin Recovery Metric)
@@ -1056,6 +1057,7 @@ def sequential_random_patching_jsd(
     template=None,
     checkpoint_path=None,
     decoding=None,
+    max_generation_steps=1024,
 ):
     """
     Algorithm 4: Random Activation Patching (JSD Metric)
@@ -1281,6 +1283,7 @@ def sequential_random_patching_dual_metric(
     template=None,
     checkpoint_path=None,
     decoding=None,
+    max_generation_steps=1024,
 ):
     """
     Random-Gaussian control, scoring margin and JSD from one sweep.
@@ -1867,6 +1870,7 @@ def main():
             ctx=args.ctx,
             output_json_path=out_path,
             seed=args.seed,
+            max_generation_steps=args.max_steps,
         )
 
         if name in MULTI_OUTPUT:
@@ -1889,8 +1893,6 @@ def main():
                           f"Run the experiment that produces them first.")
                     continue
                 kwargs["reference_json_paths"] = refs
-            else:
-                kwargs["max_generation_steps"] = args.max_steps
 
             print("" + "=" * 60)
             print(f"EXPERIMENT: {name}   ->   " +
@@ -1912,7 +1914,6 @@ def main():
             kwargs["jsd_heads_per_pos" if name.endswith("jsd") else
                    "margin_ratio_heads_per_pos"] = args.heads_per_pos
         else:
-            kwargs["max_generation_steps"] = args.max_steps
             kwargs["jsd_heads_per_pos" if name.endswith("jsd") else
                    "margin_ratio_heads_per_pos"] = args.heads_per_pos
 

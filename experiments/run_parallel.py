@@ -144,6 +144,10 @@ def _worker_main(cfg):
                 repetition_penalty=cfg["repetition_penalty"],
                 no_repeat_ngram_size=cfg["no_repeat_ngram_size"],
             ),
+            # random controls need the same budget as their normal run: it
+            # decides which examples reach the answer trigger, so a different
+            # value would accept a different example set
+            max_generation_steps=cfg["max_steps"],
         )
         if name in _rp.MULTI_OUTPUT:
             kwargs["output_paths"] = {m: None for m in _rp.MULTI_OUTPUT[name]}
@@ -152,16 +156,12 @@ def _worker_main(cfg):
                 # a dict of {"margin": path, "jsd": path}, unlike the plain
                 # string the legacy single-metric random controls take below
                 kwargs["reference_json_paths"] = cfg["reference_json_path"]
-            else:
-                kwargs["max_generation_steps"] = cfg["max_steps"]
         else:
             kwargs["output_json_path"] = None
             key = "jsd_heads_per_pos" if name.endswith("jsd") else "margin_ratio_heads_per_pos"
             kwargs[key] = cfg["heads_per_pos"]
             if name in _rp.RANDOM_REFERENCE:
                 kwargs["reference_json_path"] = cfg["reference_json_path"]
-            else:
-                kwargs["max_generation_steps"] = cfg["max_steps"]
 
         _rp.EXPERIMENTS[name](**kwargs)
         _sys.exit(0)
