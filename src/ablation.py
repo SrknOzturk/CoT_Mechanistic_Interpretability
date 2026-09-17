@@ -154,13 +154,19 @@ def _generate_with_ablation(
                 return _decode_generated_only(model, input_tokens, output_tokens)
 
             # phase 2 -- collect the answer tokens
+            answer_started = False
             while generated < max_new_tokens:
                 logits = last_position_logits(model, output_tokens[:, -context_window:])
                 next_token = logits.argmax(dim=-1, keepdim=True)
                 del logits
                 token_str = _decode_single_token(model, next_token)
-                if not task.is_answer_continuation(token_str):
+                # The trigger can match before its trailing space, and Llama 3
+                # emits that space as its own token ahead of a number ("is",
+                # " ", "88"). That space is not the end of the answer.
+                leading_space = not answer_started and not token_str.strip(" ")
+                if not leading_space and not task.is_answer_continuation(token_str):
                     break
+                answer_started = answer_started or not leading_space
                 output_tokens = _append_token(output_tokens, next_token)
                 generated += 1
                 if generated % 64 == 0 and str(device).startswith("cuda"):

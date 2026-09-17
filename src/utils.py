@@ -389,6 +389,19 @@ def generate_full_answer_and_get_logits(model, prompt: str, max_new_tokens: int 
             current_text = model.to_string(output_tokens)[0]
             if task.ends_reasoning(current_text):
                 logits = model(output_tokens[:, -2048:])
+                # ends_reasoning also matches the trigger without its trailing
+                # space, because some tokenizers glue that space onto the answer
+                # (OLMo: " True"). Others emit it as a token of its own before a
+                # number (Llama 3: "is", " ", "88"), and stopping at "is" would
+                # capture logits that predict the space. Fold whitespace-only
+                # tokens into the trace so the captured logits predict the answer.
+                while len(generated_ids) < max_new_tokens:
+                    ws_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
+                    if _decode_single_token(model, ws_token).strip(" "):
+                        break
+                    output_tokens = torch.cat([output_tokens, ws_token.unsqueeze(0)], dim=1)
+                    generated_ids.append(int(ws_token.item()))
+                    logits = model(output_tokens[:, -2048:])
                 answer_token_logits = logits[0, -1, :].clone()
                 next_token = logits[0, -1, :].argmax(dim=-1, keepdim=True)
                 output_tokens = torch.cat([output_tokens, next_token.unsqueeze(0)], dim=1)
