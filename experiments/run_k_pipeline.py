@@ -12,6 +12,9 @@ import sys
 import json
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, REPO_ROOT)
+
+from src.tasks import TASKS
 
 
 def run(args):
@@ -97,7 +100,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stage", choices=["prepare", "complete", "all"])
     ap.add_argument("--model", default="qwen2.5-0.5b")
-    ap.add_argument("--dataset", default="svamp")
+    ap.add_argument("--dataset", default="svamp", choices=sorted(TASKS))
     ap.add_argument("--template", default="step_by_step")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--results-dir", default=os.path.join(REPO_ROOT, "results"))
@@ -105,7 +108,8 @@ def main():
     ap.add_argument("--jsd-k", type=int)
     ap.add_argument("--ctx", type=int, default=2048)
     ap.add_argument("--max-steps", type=int, default=1024)
-    ap.add_argument("--target-n", type=int, default=64)
+    ap.add_argument("--target-n", type=int, default=None,
+                    help="examples to keep (default: task target, otherwise min(64, pool size))")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--workers", type=int)
     ap.add_argument("--gpu-total-gb", type=float)
@@ -115,6 +119,16 @@ def main():
         help="also run Direct-Equation ablation for SVAMP",
     )
     args = ap.parse_args()
+    if args.target_n is None:
+        data_path = os.path.join(
+            REPO_ROOT, "data", "processed", TASKS[args.dataset].dataset_file
+        )
+        try:
+            with open(data_path, encoding="utf-8") as f:
+                pool_size = len(json.load(f))
+            args.target_n = min(TASKS[args.dataset].default_target_n or 64, pool_size)
+        except (OSError, TypeError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"Could not determine candidate-pool size from {data_path}: {exc}")
     if args.stage in ("prepare", "all"):
         prepare(args)
     if args.stage in ("complete", "all"):

@@ -729,8 +729,9 @@ def main():
                     choices=sorted(rp.EXPERIMENTS), metavar="EXP",
                     help=f"any of: {', '.join(sorted(rp.EXPERIMENTS))} "
                          f"(default order: {' '.join(rp.DEFAULT_ORDER)})")
-    ap.add_argument("--target-n", type=int, default=64,
-                    help="successfully-patched examples to collect (default: 64)")
+    ap.add_argument("--target-n", type=int, default=None,
+                    help="successfully-patched examples to collect (default: task target, "
+                         "otherwise min(64, pool size))")
     ap.add_argument("--n", type=int, default=None,
                     help="limit the candidate pool to the first N rows before splitting into "
                          "--target-n primary + reserve (default: use the whole file)")
@@ -798,6 +799,8 @@ def main():
         sys.exit(1)
 
     all_ids = [str(x) for x in df[id_column].tolist()]
+    if args.target_n is None:
+        args.target_n = min(task.default_target_n or 64, len(all_ids))
     if args.target_n > len(all_ids):
         print(f"[ERROR] --target-n {args.target_n} exceeds the candidate pool size "
               f"({len(all_ids)}); lower --target-n or widen the pool (drop --n, or "

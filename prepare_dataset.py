@@ -22,6 +22,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.data_loader import (
+    curate_bigbench_boolean_expressions_and_save_json,
     PRONTOQA_STRATIFY,
     SVAMP_STRATIFY,
     create_and_save_balanced_subset,
@@ -40,6 +41,16 @@ SVAMP_POOL = os.path.join(PROCESSED, "svamp_candidates.json")
 PRONTOQA_RAW_DIR = os.path.join(RAW, "prontoqa")
 PRONTOQA_CURATED = os.path.join(PROCESSED, "prontoqa_curated.json")
 PRONTOQA_POOL = os.path.join(PROCESSED, "prontoqa_candidates.json")
+
+BIGBENCH_BOOLEAN_SOURCE = os.path.join(
+    PROCESSED, "bigbench_boolean_expressions_l4_l5_l6_balanced_60.json"
+)
+BIGBENCH_BOOLEAN_RESERVE = os.path.join(
+    PROCESSED, "bigbench_boolean_expressions_l5_l6_reserve_30.json"
+)
+BIGBENCH_BOOLEAN_POOL = os.path.join(
+    PROCESSED, "bigbench_boolean_expressions_candidates.json"
+)
 
 # The experiments keep TARGET_N examples per dataset. The pools below are
 # larger on purpose: the pre-filter drops any example whose CoT trace never
@@ -69,7 +80,11 @@ def discover_prontoqa_files(directory):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", choices=["svamp", "prontoqa"], default=None)
+    ap.add_argument(
+        "--only",
+        choices=["svamp", "prontoqa", "bigbench_boolean_expressions"],
+        default=None,
+    )
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -112,6 +127,26 @@ def main():
                 random_state=args.seed,
                 drop_zero_operations=False,
                 keep_groups={"hop": PRONTOQA_HOPS},
+            )
+
+    if args.only in (None, "bigbench_boolean_expressions"):
+        print()
+        print("=" * 60)
+        print("BIG-bench Boolean Expressions")
+        print("=" * 60)
+        missing_boolean_files = [
+            path for path in (BIGBENCH_BOOLEAN_SOURCE, BIGBENCH_BOOLEAN_RESERVE)
+            if not os.path.exists(path)
+        ]
+        if missing_boolean_files:
+            print(f"  [skip] fixed source file(s) not found: {missing_boolean_files}")
+            print("  create it with:")
+            print("    python experiments/create_bigbench_boolean_expressions_balanced_dataset.py")
+        else:
+            curate_bigbench_boolean_expressions_and_save_json(
+                BIGBENCH_BOOLEAN_SOURCE,
+                BIGBENCH_BOOLEAN_POOL,
+                reserve_json_path=BIGBENCH_BOOLEAN_RESERVE,
             )
 
     print()

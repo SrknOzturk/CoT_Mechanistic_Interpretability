@@ -30,6 +30,7 @@ from src.models import MODELS, get_model_spec
 DATASETS = {
     "svamp": dict(n=100, mean_steps=55, seq_len=260),
     "prontoqa": dict(n=100, mean_steps=85, seq_len=520),
+    "bigbench_boolean_expressions": dict(n=60, mean_steps=25, seq_len=300),
 }
 
 # The experiment set is one sequential scan (scoring margin and JSD together)

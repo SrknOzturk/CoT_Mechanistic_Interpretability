@@ -1,0 +1,560 @@
+{
+  "description": "Balanced, fixed shared subset for Qwen2.5-0.5B and OLMo2-1B experiments.",
+  "source_task": "BIG-bench boolean_expressions",
+  "selection_seed": 42,
+  "lengths": [
+    4,
+    5,
+    6
+  ],
+  "per_length": 20,
+  "per_label_per_length": 10,
+  "total": 60,
+  "excluded_demonstrations": [
+    "not True and True is",
+    "True and False or True is",
+    "not ( False ) and False is"
+  ],
+  "records": [
+    {
+      "id": "bigbench_boolean_l4_true_01",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "not False or True is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_true_02",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "True or not True is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_true_03",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "not True or True is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_true_04",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "True and not False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_true_05",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "not False and True is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_true_06",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "not False or False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_true_07",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "not ( False ) is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_true_08",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "False or not False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_true_09",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "True or not False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_true_10",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "( not False ) is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_false_01",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "not not not True is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_false_02",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "False or not True is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_false_03",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "False and not False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_false_04",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "not False and False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_false_05",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "not True and False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_false_06",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "not True or False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_false_07",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "( not True ) is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_false_08",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "not ( True ) is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_false_09",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "True and not True is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l4_false_10",
+      "source": "BIG-bench boolean_expressions",
+      "length": 4,
+      "input": "False and not True is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 22
+    },
+    {
+      "id": "bigbench_boolean_l5_true_01",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "True or False and False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_true_02",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "( ( True ) ) is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_true_03",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "not False or not False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_true_04",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "True or not not False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_true_05",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "( True and True ) is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_true_06",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "False or True or False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_true_07",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "True and ( True ) is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_true_08",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "True or not not True is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_true_09",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "( not not True ) is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_true_10",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "True or False and True is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_false_01",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "( True ) and False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_false_02",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "False or not not False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_false_03",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "False and True and False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_false_04",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "False or ( False ) is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_false_05",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "True and False and True is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_false_06",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "( False or False ) is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_false_07",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "not False and not True is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_false_08",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "False and not not False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_false_09",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "not not not not False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l5_false_10",
+      "source": "BIG-bench boolean_expressions",
+      "length": 5,
+      "input": "True and False and False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 90
+    },
+    {
+      "id": "bigbench_boolean_l6_true_01",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "( not not not False ) is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_true_02",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "False or not True or True is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_true_03",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "not ( False and True ) is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_true_04",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "False or not False and True is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_true_05",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "not ( ( False ) ) is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_true_06",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "not not not False or True is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_true_07",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "False or True and not False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_true_08",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "( True ) or not True is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_true_09",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "not not True or not False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_true_10",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "not False or not not False is ",
+      "target": "True",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_false_01",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "not False and ( False ) is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_false_02",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "( not True ) or False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_false_03",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "False and True and not True is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_false_04",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "False and not False or False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_false_05",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "not True and False or False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_false_06",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "not False and not not False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_false_07",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "not True and True and True is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_false_08",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "True and True and not True is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_false_09",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "True and False and not False is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    },
+    {
+      "id": "bigbench_boolean_l6_false_10",
+      "source": "BIG-bench boolean_expressions",
+      "length": 6,
+      "input": "( False ) or not True is ",
+      "target": "False",
+      "seed": 42,
+      "possible_expressions_at_length": 216
+    }
+  ]
+}

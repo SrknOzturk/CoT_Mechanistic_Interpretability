@@ -19,6 +19,7 @@ identity.
 """
 
 import json
+import re
 from typing import Dict, List, Optional, Sequence
 
 import pandas as pd
@@ -132,6 +133,27 @@ def curate_svamp_and_save_json(raw_json_path: str, output_path: str,
 # ===========================================================================
 
 PRONTOQA_STRATIFY = ("hop",)
+PRONTOQA_BINARY_INSTRUCTION = "True or false:"
+
+
+def _prontoqa_binary_label(value: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1"}:
+        return "True"
+    if normalized in {"false", "0"}:
+        return "False"
+    raise ValueError(f"unexpected ProntoQA answer label: {value!r}")
+
+
+def _prontoqa_binary_question(question: str, query: str) -> str:
+    """Render a ProntoQA query with an explicit True/False question."""
+    statement = re.sub(
+        r"^\s*true\s+or\s+false\s*:\s*",
+        "",
+        str(query),
+        flags=re.IGNORECASE,
+    )
+    return _collapse(f"{question} {PRONTOQA_BINARY_INSTRUCTION} {statement}")
 
 
 def curate_prontoqa_and_save_json(
@@ -149,7 +171,7 @@ def curate_prontoqa_and_save_json(
 
     hop_files maps hop count -> path.
     """
-    records, cot_demo = [], None
+    records, demos_by_label = [], {}
 
     for hop in sorted(hop_files):
         data = json.load(open(hop_files[hop], "r", encoding="utf-8"))
@@ -157,28 +179,29 @@ def curate_prontoqa_and_save_json(
             test = item["test_example"]
             demo = item.get("in_context_example0")
 
-            question = _collapse(f"{test['question']} {test['query']}")
+            question = _prontoqa_binary_question(test["question"], test["query"])
             if demo is not None:
                 demo_fields = {
-                    "question": _collapse(f"{demo['question']} {demo['query']}"),
+                    "question": _prontoqa_binary_question(demo["question"], demo["query"]),
                     "reasoning": " ".join(demo["chain_of_thought"]),
-                    "answer": str(demo["answer"]),
+                    "answer": _prontoqa_binary_label(demo["answer"]),
                 }
-                # The first in-context example becomes the shared exemplar for
-                # both the CoT and No-CoT sides.
-                if cot_demo is None:
-                    cot_demo = demo_fields
+                demos_by_label.setdefault(demo_fields["answer"], demo_fields)
 
             records.append({
                 "ID": f"{hop}hop-{key}",
                 "hop": hop,
                 "PromptWithoutExample": question,
-                "Answer": str(test["answer"]),
+                "Answer": _prontoqa_binary_label(test["answer"]),
                 "ChainOfThought": " ".join(test["chain_of_thought"]),
             })
 
-    if cot_demo is None:
-        raise ValueError("no in-context example found; regenerate with --few-shot-examples 1")
+    if set(demos_by_label) != {"False", "True"}:
+        raise ValueError("need at least one False-demo and one True-demo")
+
+    # A fixed balanced pair prevents the model from learning that the only
+    # demonstrated answer is False. Keep the same examples and order on both sides.
+    cot_demo = [demos_by_label["False"], demos_by_label["True"]]
 
     df = pd.DataFrame(records)
     # Keep the 1-shot demonstration identical across the clean CoT and corrupt
@@ -191,6 +214,173 @@ def curate_prontoqa_and_save_json(
     print(f"ProntoQA: {len(df)} examples -> {output_path}")
     print(f"  hops: {df['hop'].value_counts().sort_index().to_dict()}")
     print(f"  answers: {df['Answer'].value_counts().to_dict()}")
+    return df
+
+
+# ===========================================================================
+# BIG-bench Boolean Expressions
+# ===========================================================================
+
+# These are the length-4/5/6 demonstrations selected for the experiment.  Keep
+# the prose and line breaks in one shared definition so the pilot, patching and
+# ablation paths cannot silently drift onto different prompts.
+BIGBENCH_BOOLEAN_COT_PROMPT = """Evaluate the Boolean expression. Evaluate parentheses first, then not, then and, then or.
+
+Q: not True and True is
+A: Let's think step by step. not True = False. Therefore False and True = False. The answer is False.
+
+Q: True and False or True is
+A: Let's think step by step. True and False = False. Therefore False or True = True. The answer is True.
+
+Q: not ( False ) and False is
+A: Let's think step by step. not False = True. Therefore True and False = False. The answer is False."""
+
+BIGBENCH_BOOLEAN_NOCOT_PROMPT = """Evaluate the Boolean expression. Answer True or False.
+
+Q: not True and True is
+A: The answer is False.
+
+Q: True and False or True is
+A: The answer is True.
+
+Q: not ( False ) and False is
+A: The answer is False."""
+
+BIGBENCH_BOOLEAN_DEMO_QUESTIONS = (
+    "not True and True is",
+    "True and False or True is",
+    "not ( False ) and False is",
+)
+
+
+def _boolean_target_question(value: str) -> str:
+    """Normalize a BIG-bench input such as ``'True and False is '``."""
+    return _collapse(value).strip()
+
+
+def curate_bigbench_boolean_expressions_and_save_json(
+    source_json_path: str,
+    output_path: str,
+    reserve_json_path: Optional[str] = None,
+) -> pd.DataFrame:
+    """
+    Convert the fixed balanced Boolean Expressions set to the flat prompt table
+    consumed by the existing patching and ablation runners.
+
+    The default ``step_by_step`` columns reproduce the exact prompt used in the
+    Boolean pilot.  ``qa1shot`` columns are also populated for CLI compatibility,
+    but new runs should use the default template.
+    """
+    def load_rows(path: str) -> List[Dict]:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        rows = payload.get("records", payload)
+        if not isinstance(rows, list) or not rows:
+            raise ValueError(f"Boolean Expressions source has no records: {path}")
+        return rows
+
+    def convert_rows(rows: List[Dict], pool_split: str) -> List[Dict]:
+        records = []
+        for row in rows:
+            answer = str(row["target"]).strip().title()
+            if answer not in {"True", "False"}:
+                raise ValueError(f"unexpected Boolean Expressions answer: {row['target']!r}")
+            question = _boolean_target_question(row["input"])
+            records.append({
+                "ID": str(row["id"]),
+                "source": row.get("source", "BIG-bench boolean_expressions"),
+                "pool_split": pool_split,
+                "length": int(row["length"]),
+                "Type": f"length_{int(row['length'])}",
+                "PromptWithoutExample": question,
+                "Answer": answer,
+                "seed": row.get("seed"),
+                "possible_expressions_at_length": row.get("possible_expressions_at_length"),
+            })
+        return records
+
+    primary_records = convert_rows(load_rows(source_json_path), "primary")
+    reserve_records = (
+        convert_rows(load_rows(reserve_json_path), "reserve")
+        if reserve_json_path else []
+    )
+    df = pd.DataFrame(primary_records + reserve_records)
+
+    if df["ID"].duplicated().any():
+        raise ValueError("duplicate IDs across the Boolean primary and reserve pools")
+    if df["PromptWithoutExample"].duplicated().any():
+        raise ValueError("duplicate questions across the Boolean primary and reserve pools")
+    demo_questions = {_boolean_target_question(q) for q in BIGBENCH_BOOLEAN_DEMO_QUESTIONS}
+    overlap = set(df["PromptWithoutExample"]) & demo_questions
+    if overlap:
+        raise ValueError(f"demonstration questions leaked into the evaluation pool: {overlap}")
+
+    step = get_template("step_by_step")
+    df[step.cot_col] = [
+        f"{BIGBENCH_BOOLEAN_COT_PROMPT}\n\nQ: {q}\nA: Let's think step by step."
+        for q in df["PromptWithoutExample"]
+    ]
+    df[step.nocot_col] = [
+        f"{BIGBENCH_BOOLEAN_NOCOT_PROMPT}\n\nQ: {q}\nA:"
+        for q in df["PromptWithoutExample"]
+    ]
+
+    # Retain the legacy template as an explicitly selectable reproduction
+    # option without changing its behavior for existing datasets.
+    qa1 = get_template("qa1shot")
+    demos = [
+        {
+            "question": BIGBENCH_BOOLEAN_DEMO_QUESTIONS[0],
+            "reasoning": "not True = False. Therefore False and True = False.",
+            "answer": "False",
+        },
+        {
+            "question": BIGBENCH_BOOLEAN_DEMO_QUESTIONS[1],
+            "reasoning": "True and False = False. Therefore False or True = True.",
+            "answer": "True",
+        },
+        {
+            "question": BIGBENCH_BOOLEAN_DEMO_QUESTIONS[2],
+            "reasoning": "not False = True. Therefore True and False = False.",
+            "answer": "False",
+        },
+    ]
+    df[qa1.cot_col] = [
+        "Evaluate the Boolean expression. Evaluate parentheses first, then not, then and, then or.\n\n"
+        + qa1.render_cot({"question": q}, demos)
+        for q in df["PromptWithoutExample"]
+    ]
+    df[qa1.nocot_col] = [
+        "Evaluate the Boolean expression. Answer True or False.\n\n"
+        + qa1.render_nocot({"question": q}, demos)
+        for q in df["PromptWithoutExample"]
+    ]
+
+    primary_df = df[df["pool_split"] == "primary"]
+    counts = primary_df.groupby(["length", "Answer"]).size().to_dict()
+    expected = {(length, label): 10 for length in (4, 5, 6) for label in ("False", "True")}
+    if counts != expected:
+        raise ValueError(f"expected 10 examples per length/answer cell, found {counts}")
+
+    if reserve_records:
+        reserve_df = df[df["pool_split"] == "reserve"]
+        reserve_counts = reserve_df.groupby(["length", "Answer"]).size().to_dict()
+        expected_reserve = {
+            (5, "False"): 7,
+            (5, "True"): 8,
+            (6, "False"): 8,
+            (6, "True"): 7,
+        }
+        if reserve_counts != expected_reserve:
+            raise ValueError(
+                f"unexpected Boolean reserve length/answer counts: {reserve_counts}"
+            )
+
+    df.to_json(output_path, orient="records", indent=4, force_ascii=False)
+    print(
+        "BIG-bench Boolean Expressions: "
+        f"{len(primary_records)} primary + {len(reserve_records)} reserve -> {output_path}"
+    )
     return df
 
 

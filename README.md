@@ -10,7 +10,7 @@ Models, datasets and prompt templates are registry entries rather than code path
 | Registry | Entries |
 |---|---|
 | Models (`src/models.py`) | `qwen2.5-0.5b`, `olmo2-1b`, `llama3.2-1b` (all base, all float32) |
-| Datasets (`src/tasks.py`) | `svamp` (numeric answers), `prontoqa` (True/False answers) |
+| Datasets (`src/tasks.py`) | `svamp` (numeric), `prontoqa` (True/False), `bigbench_boolean_expressions` (balanced lengths 4/5/6) |
 | Templates (`src/templates.py`) | `step_by_step` (default), `qa1shot` |
 
 ## 📂 Repository Structure
@@ -86,6 +86,16 @@ experiments and, unless `--no-ablation` is passed, the ablation that verifies th
 
 ```bash
 python experiments/run_parallel.py --model qwen2.5-0.5b --dataset svamp --target-n 64
+```
+
+The fixed Boolean Expressions pool keeps 60 primary questions and 30 automatic
+reserves from lengths 5/6. The reserves replace primary examples that do not
+reach the answer anchor. The selected length-4/5/6 demonstrations are already
+included in the prompts, so the dataset parameter is the only task-specific
+argument:
+
+```bash
+python experiments/run_parallel.py --dataset bigbench_boolean_expressions
 ```
 
 What that covers, for one (model, dataset, template):

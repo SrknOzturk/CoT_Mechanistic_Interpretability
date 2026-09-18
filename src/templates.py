@@ -13,13 +13,18 @@ so the one asymmetry between them must be the chain-of-thought cue itself.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Dict
+from typing import Callable, Dict, List, Union
 
 import pandas as pd
 
 from src.tasks import ANSWER_TRIGGER, get_task
 
 STEP_BY_STEP = "Let's think step by step."
+Demo = Union[Dict, List[Dict]]
+
+
+def _as_demos(demo: Demo) -> List[Dict]:
+    return demo if isinstance(demo, list) else [demo]
 
 
 @dataclass(frozen=True)
@@ -36,8 +41,8 @@ class TemplateSpec:
     key: str
     description: str
     corrupt_suffix: str
-    render_cot: Callable[[Dict, Dict], str]
-    render_nocot: Callable[[Dict, Dict], str]
+    render_cot: Callable[[Dict, Demo], str]
+    render_nocot: Callable[[Dict, Demo], str]
 
     @property
     def cot_col(self) -> str:
@@ -59,22 +64,21 @@ class TemplateSpec:
 # The cue appears only on the CoT side. That asymmetry is the manipulation.
 # ---------------------------------------------------------------------------
 
-def _cot_step_by_step(target: Dict, demo: Dict) -> str:
-    return (
-        f"Q: {demo['question']} "
-        f"A: {STEP_BY_STEP} {demo['reasoning']} {ANSWER_TRIGGER}{demo['answer']}. "
-        f"Q: {target['question']} "
-        f"A: {STEP_BY_STEP}"
+def _cot_step_by_step(target: Dict, demo: Demo) -> str:
+    prefix = "".join(
+        f"Q: {item['question']} "
+        f"A: {STEP_BY_STEP} {item['reasoning']} {ANSWER_TRIGGER}{item['answer']}. "
+        for item in _as_demos(demo)
     )
+    return f"{prefix}Q: {target['question']} A: {STEP_BY_STEP}"
 
 
-def _nocot_step_by_step(target: Dict, demo: Dict) -> str:
-    return (
-        f"Q: {demo['question']} "
-        f"A: {ANSWER_TRIGGER}{demo['answer']}. "
-        f"Q: {target['question']} "
-        f"A:"
+def _nocot_step_by_step(target: Dict, demo: Demo) -> str:
+    prefix = "".join(
+        f"Q: {item['question']} A: {ANSWER_TRIGGER}{item['answer']}. "
+        for item in _as_demos(demo)
     )
+    return f"{prefix}Q: {target['question']} A:"
 
 
 # ---------------------------------------------------------------------------
@@ -82,16 +86,16 @@ def _nocot_step_by_step(target: Dict, demo: Dict) -> str:
 # refactor can be checked against the existing results, not for new runs.
 # ---------------------------------------------------------------------------
 
-def _cot_qa1shot(target: Dict, demo: Dict) -> str:
-    return (
-        f"Q: {demo['question']} "
-        f"A: {demo['reasoning']} {ANSWER_TRIGGER}{demo['answer']}. "
-        f"Q: {target['question']} "
-        f"A:"
+def _cot_qa1shot(target: Dict, demo: Demo) -> str:
+    prefix = "".join(
+        f"Q: {item['question']} "
+        f"A: {item['reasoning']} {ANSWER_TRIGGER}{item['answer']}. "
+        for item in _as_demos(demo)
     )
+    return f"{prefix}Q: {target['question']} A:"
 
 
-def _nocot_qa1shot(target: Dict, demo: Dict) -> str:
+def _nocot_qa1shot(target: Dict, demo: Demo) -> str:
     return _nocot_step_by_step(target, demo)
 
 
@@ -121,7 +125,7 @@ def get_template(key: str = DEFAULT_TEMPLATE) -> TemplateSpec:
     return TEMPLATES[key]
 
 
-def check_template(spec: TemplateSpec, target: Dict, demo: Dict) -> None:
+def check_template(spec: TemplateSpec, target: Dict, demo: Demo) -> None:
     """
     Guards the two invariants every patching run depends on. Cheap, and catches
     a malformed template before it costs GPU hours.
@@ -130,10 +134,11 @@ def check_template(spec: TemplateSpec, target: Dict, demo: Dict) -> None:
     nocot = spec.render_nocot(target, demo)
 
     n = cot.count(ANSWER_TRIGGER)
-    if n != 1:
+    expected = len(_as_demos(demo))
+    if n != expected:
         raise ValueError(
-            f"[{spec.key}] CoT prompt must contain {ANSWER_TRIGGER!r} exactly once "
-            f"before generation (found {n})"
+            f"[{spec.key}] CoT prompt must contain {ANSWER_TRIGGER!r} once per demo "
+            f"before generation (expected {expected}, found {n})"
         )
     corrupted = nocot + spec.corrupt_suffix
     if not corrupted.endswith(ANSWER_TRIGGER):

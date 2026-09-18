@@ -84,6 +84,12 @@ def _append_ablation_checkpoint(path, record):
 # Generation under ablation
 # ============================================================
 
+def _answer_trigger_reached(task, text):
+    """Whether a generated CoT trajectory actually reached an answer anchor."""
+    text = text or ""
+    return any(trigger in text or trigger.rstrip() in text for trigger in task.triggers)
+
+
 def _generate_with_ablation(
     model,
     prompt,
@@ -154,25 +160,39 @@ def _generate_with_ablation(
                 return _decode_generated_only(model, input_tokens, output_tokens)
 
             # phase 2 -- collect the answer tokens
+            #
+            # The trigger may match before its trailing space.  Some tokenizers
+            # emit that space separately ("is", " ", "42"), while others glue
+            # it to the answer (" True").  Preserve leading space-only tokens,
+            # then always retain the first content token even when it is outside
+            # the task's preferred format (for example 0/1 for a True/False
+            # task).  Later tokens must pass the continuation gate.  A newline
+            # before any answer content still ends generation.
             answer_started = False
             while generated < max_new_tokens:
                 logits = last_position_logits(model, output_tokens[:, -context_window:])
                 next_token = logits.argmax(dim=-1, keepdim=True)
                 del logits
                 token_str = _decode_single_token(model, next_token)
-                # The trigger can match before its trailing space, and Llama 3
-                # emits that space as its own token ahead of a number ("is",
-                # " ", "88"). That space is not the end of the answer.
+                is_continuation = task.is_answer_continuation(token_str)
                 leading_space = not answer_started and not token_str.strip(" ")
-                if not leading_space and not task.is_answer_continuation(token_str):
+                other_whitespace = (
+                    not answer_started
+                    and not leading_space
+                    and not token_str.strip()
+                )
+                if other_whitespace or (answer_started and not is_continuation):
                     break
-                answer_started = answer_started or not leading_space
                 output_tokens = _append_token(output_tokens, next_token)
                 generated += 1
+                if not leading_space:
+                    answer_started = True
                 if generated % 64 == 0 and str(device).startswith("cuda"):
                     torch.cuda.empty_cache()
                 if print_tokens:
                     print(generated, repr(token_str))
+                if answer_started and not is_continuation:
+                    break
 
         return _decode_generated_only(model, input_tokens, output_tokens)
 
@@ -292,11 +312,13 @@ def run_nocot_ablation_using_curated_heads(
 
         normal_extracted = task.extract(normal_text)
         normal_correct = task.answers_equal(normal_extracted, true_ans)
-        # The No-CoT prompt already ends with the answer trigger and the
-        # generator returns only newly generated text.  Looking for the trigger
-        # inside normal_text would therefore mark every valid answer as skipped.
-        # A baseline is unusable only when no task answer can be extracted.
-        skipped = normal_extracted is None
+        normal_parseable = normal_extracted is not None
+        # An unparseable model answer is an incorrect answer, not an
+        # unexecuted example.  Excluding it from ``n`` inflated accuracy and, in
+        # the Boolean Expressions runs, reduced Qwen from 60 to 47 examples and
+        # OLMo from 60 to 3.  Keep ``skipped`` for output-schema compatibility;
+        # every No-CoT row that reached generation belongs in the denominator.
+        skipped = False
 
         # ------------------------------
         # Selected-head ablation
@@ -304,6 +326,7 @@ def run_nocot_ablation_using_curated_heads(
         ablation_text = None
         ablation_extracted = None
         ablation_correct = None
+        ablation_parseable = False
 
         if num_heads > 0:
             ablation_text = generate_with_optional_ablation(
@@ -318,6 +341,7 @@ def run_nocot_ablation_using_curated_heads(
 
             ablation_extracted = task.extract(ablation_text)
             ablation_correct = task.answers_equal(ablation_extracted, true_ans)
+            ablation_parseable = ablation_extracted is not None
 
         # ------------------------------
         # Random-head ablation
@@ -325,6 +349,7 @@ def run_nocot_ablation_using_curated_heads(
         random_text = None
         random_extracted = None
         random_correct = None
+        random_parseable = False
         random_heads_list = None
 
         if num_heads > 0:
@@ -346,6 +371,7 @@ def run_nocot_ablation_using_curated_heads(
 
             random_extracted = task.extract(random_text)
             random_correct = task.answers_equal(random_extracted, true_ans)
+            random_parseable = random_extracted is not None
 
         record = {
             "example_id": example_id,
@@ -359,14 +385,17 @@ def run_nocot_ablation_using_curated_heads(
 
             "normal_text": normal_text,
             "normal_extracted": normal_extracted,
+            "normal_parseable": normal_parseable,
             "normal_correct": normal_correct,
 
             "ablation_text": ablation_text,
             "ablation_extracted": ablation_extracted,
+            "ablation_parseable": ablation_parseable,
             "ablation_correct": ablation_correct,
 
             "random_text": random_text,
             "random_extracted": random_extracted,
+            "random_parseable": random_parseable,
             "random_correct": random_correct,
 
             "correct": ablation_correct if ablation_correct is not None else False
@@ -661,8 +690,10 @@ def run_cot_ablation_using_curated_heads(
         # If the unablated run never reached the trigger there is no baseline to
         # ablate away, so the row is marked and excluded from accuracy rather than
         # counted as a failure caused by the ablation.
-        skipped = task.answer_trigger not in (normal_text or "")
-        normal_extracted = task.extract(normal_text)
+        normal_answer_anchor_reached = _answer_trigger_reached(task, normal_text)
+        skipped = not normal_answer_anchor_reached
+        normal_extracted = task.extract(normal_text) if normal_answer_anchor_reached else None
+        normal_parseable = normal_extracted is not None
         normal_correct = task.answers_equal(normal_extracted, true_ans)
 
         # ------------------------------
@@ -671,6 +702,8 @@ def run_cot_ablation_using_curated_heads(
         ablation_text = None
         ablation_extracted = None
         ablation_correct = None
+        ablation_answer_anchor_reached = False
+        ablation_parseable = False
 
         if num_heads > 0:
             ablation_text = generate_cot_with_optional_ablation(
@@ -684,7 +717,11 @@ def run_cot_ablation_using_curated_heads(
                 decoding=decoding,
             )
 
-            ablation_extracted = task.extract(ablation_text)
+            ablation_answer_anchor_reached = _answer_trigger_reached(task, ablation_text)
+            ablation_extracted = (
+                task.extract(ablation_text) if ablation_answer_anchor_reached else None
+            )
+            ablation_parseable = ablation_extracted is not None
             ablation_correct = task.answers_equal(ablation_extracted, true_ans)
 
         # ------------------------------
@@ -693,6 +730,8 @@ def run_cot_ablation_using_curated_heads(
         random_text = None
         random_extracted = None
         random_correct = None
+        random_answer_anchor_reached = False
+        random_parseable = False
         random_heads_list = None
 
         if num_heads > 0:
@@ -713,7 +752,9 @@ def run_cot_ablation_using_curated_heads(
                 decoding=decoding,
             )
 
-            random_extracted = task.extract(random_text)
+            random_answer_anchor_reached = _answer_trigger_reached(task, random_text)
+            random_extracted = task.extract(random_text) if random_answer_anchor_reached else None
+            random_parseable = random_extracted is not None
             random_correct = task.answers_equal(random_extracted, true_ans)
 
         record = {
@@ -727,15 +768,21 @@ def run_cot_ablation_using_curated_heads(
             "num_heads_ablated": num_heads,
 
             "normal_text": normal_text,
+            "normal_answer_anchor_reached": normal_answer_anchor_reached,
             "normal_extracted": normal_extracted,
+            "normal_parseable": normal_parseable,
             "normal_correct": normal_correct,
 
             "ablation_text": ablation_text,
+            "ablation_answer_anchor_reached": ablation_answer_anchor_reached,
             "ablation_extracted": ablation_extracted,
+            "ablation_parseable": ablation_parseable,
             "ablation_correct": ablation_correct,
 
             "random_text": random_text,
+            "random_answer_anchor_reached": random_answer_anchor_reached,
             "random_extracted": random_extracted,
+            "random_parseable": random_parseable,
             "random_correct": random_correct,
 
             "correct": ablation_correct if ablation_correct is not None else False

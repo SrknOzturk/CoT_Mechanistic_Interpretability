@@ -46,7 +46,9 @@ class AnswerTriggerNotFound(RuntimeError):
 # ===========================================================================
 
 _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
-_BOOL_RE = re.compile(r"\b(true|false)\b", re.IGNORECASE)
+_BOOL_RE = re.compile(r"\b(true|false|0)\b", re.IGNORECASE)
+_TRUE_FALSE_RE = re.compile(r"\b(true|false)\b", re.IGNORECASE)
+_BINARY_RE = re.compile(r"\b([01])\b")
 
 
 def extract_last_number(text: Any) -> Optional[float]:
@@ -57,7 +59,7 @@ def extract_last_number(text: Any) -> Optional[float]:
 
 def extract_first_bool(text: Any) -> Optional[bool]:
     """
-    First True/False in a generated block.
+    First True/False (or legacy numeric 0 for False) in a generated block.
 
     First, not last: the answer is the token immediately after the trigger, and
     anything following it is the model running on into the next question.
@@ -66,6 +68,41 @@ def extract_first_bool(text: Any) -> Optional[bool]:
     if not m:
         return None
     return m.group(1).lower() == "true"
+
+
+def extract_first_true_false(text: Any) -> Optional[bool]:
+    """First explicit True/False label in a generated answer segment."""
+    m = _TRUE_FALSE_RE.search(str(text))
+    if not m:
+        return None
+    return m.group(1).lower() == "true"
+
+
+def extract_first_true_false_or_binary(text: Any) -> Optional[bool]:
+    """
+    Parse True/False, or an answer segment that is exactly the alias 1/0.
+
+    Numeric aliases are deliberately stricter than word labels: ``1 1``,
+    ``10``, ``1.`` and any other digit-bearing text are invalid rather than
+    being reduced to their first digit.
+    """
+    answer = str(text).strip()
+    if answer == "1":
+        return True
+    if answer == "0":
+        return False
+    if any(ch.isdigit() for ch in answer):
+        return None
+    m = _TRUE_FALSE_RE.search(answer)
+    if not m:
+        return None
+    return m.group(1).lower() == "true"
+
+
+def extract_first_binary(text: Any) -> Optional[int]:
+    """First standalone 0/1 label in a generated answer segment."""
+    m = _BINARY_RE.search(str(text))
+    return int(m.group(1)) if m else None
 
 
 def numeric_equal(pred: Any, gold: Any, tol: float = 1e-4) -> bool:
@@ -128,6 +165,11 @@ def alpha_continuation(token_str: Optional[str]) -> bool:
     return stripped.isalpha()
 
 
+def binary_continuation(token_str: Optional[str]) -> bool:
+    """Accept only a standalone binary answer token."""
+    return bool(token_str and token_str.strip() in {"0", "1"})
+
+
 # ===========================================================================
 # TaskSpec
 # ===========================================================================
@@ -144,6 +186,7 @@ class TaskSpec:
     answer_trigger_alts: Tuple[str, ...] = ()
     stratify_keys: Tuple[str, ...] = ()
     dataset_file: str = ""
+    default_target_n: Optional[int] = None
     description: str = ""
 
     @property
@@ -168,8 +211,8 @@ class TaskSpec:
         The part of a generated string that follows the final answer trigger.
 
         Necessary because the question itself can contain answer-like tokens:
-        every ProntoQA query reads "True or false: ...", so scanning the whole
-        string finds the word in the prompt rather than the model's answer.
+        prompts and demonstrations may contain answer-like labels, so scanning
+        the whole string could find a label before the model's answer.
 
         Slicing uses the base trigger only, so a negative numeric answer keeps
         its sign when the model emitted "The answer is -".
@@ -211,6 +254,22 @@ TASKS: Dict[str, TaskSpec] = {
         stratify_keys=("hop",),
         dataset_file="prontoqa_candidates.json",
         description="synthetic deduction over a fictional ontology; True/False answers",
+    ),
+    "bigbench_boolean_expressions": TaskSpec(
+        key="bigbench_boolean_expressions",
+        parse_answer=extract_first_true_false_or_binary,
+        answers_equal=bool_equal,
+        # 0/1 are single-token aliases.  The generator always retains the first
+        # answer token, so keeping the alphabetic continuation gate accepts a
+        # lone 0/1 without letting repeated digits run to the token limit.
+        is_answer_continuation=alpha_continuation,
+        stratify_keys=("length", "Answer"),
+        dataset_file="bigbench_boolean_expressions_candidates.json",
+        default_target_n=60,
+        description=(
+            "BIG-bench Boolean Expressions, balanced across lengths 4/5/6 and "
+            "True/False answers (0/1 accepted as False/True aliases)"
+        ),
     ),
 }
 

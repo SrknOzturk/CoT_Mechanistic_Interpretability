@@ -1844,8 +1844,9 @@ def main():
 
     # validate the data before paying for a model load
     sampled_df = pd.read_json(data_path)
-    if args.n is not None:
-        sampled_df = sampled_df.head(args.n)
+    row_limit = args.n if args.n is not None else task.default_target_n
+    if row_limit is not None:
+        sampled_df = sampled_df.head(row_limit)
     id_column = task.id_column
     missing = [c for c in (template.cot_col, template.nocot_col, id_column)
                if c not in sampled_df.columns]
