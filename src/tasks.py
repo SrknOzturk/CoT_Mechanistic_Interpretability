@@ -49,6 +49,7 @@ _NUMBER_RE = re.compile(r"-?\d+(?:\.\d+)?")
 _BOOL_RE = re.compile(r"\b(true|false|0)\b", re.IGNORECASE)
 _TRUE_FALSE_RE = re.compile(r"\b(true|false)\b", re.IGNORECASE)
 _BINARY_RE = re.compile(r"\b([01])\b")
+_YES_NO_RE = re.compile(r"\b(yes|no)\b", re.IGNORECASE)
 
 
 def extract_last_number(text: Any) -> Optional[float]:
@@ -97,6 +98,14 @@ def extract_first_true_false_or_binary(text: Any) -> Optional[bool]:
     if not m:
         return None
     return m.group(1).lower() == "true"
+
+
+def extract_first_yes_no(text: Any) -> Optional[bool]:
+    """First explicit Yes/No label in a generated answer segment."""
+    m = _YES_NO_RE.search(str(text))
+    if not m:
+        return None
+    return m.group(1).lower() == "yes"
 
 
 def extract_first_binary(text: Any) -> Optional[int]:
@@ -269,6 +278,19 @@ TASKS: Dict[str, TaskSpec] = {
         description=(
             "BIG-bench Boolean Expressions, balanced across lengths 4/5/6 and "
             "True/False answers (0/1 accepted as False/True aliases)"
+        ),
+    ),
+    "bigbench_web_of_lies": TaskSpec(
+        key="bigbench_web_of_lies",
+        parse_answer=extract_first_yes_no,
+        answers_equal=bool_equal,
+        is_answer_continuation=alpha_continuation,
+        stratify_keys=("truth_pattern", "Answer"),
+        dataset_file="bigbench_web_of_lies_candidates.json",
+        default_target_n=64,
+        description=(
+            "BIG-bench Web of Lies: balanced two-statement truthfulness chains "
+            "with Yes/No answers"
         ),
     ),
 }

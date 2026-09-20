@@ -385,6 +385,133 @@ def curate_bigbench_boolean_expressions_and_save_json(
 
 
 # ===========================================================================
+# BIG-bench Web of Lies
+# ===========================================================================
+
+# The official BBH examples have five statements, which makes OLMo continue
+# inventing extra statements on the two-statement evaluation items.  These two
+# demonstrations match the selected task length, cover both outcomes, and are
+# shared by every model and every example.
+WEB_OF_LIES_COT_PROMPT = """Evaluate a random boolean function expressed as a word problem.
+
+Q: Question: Fidel tells the truth. Jerry says Fidel tells the truth. Does Jerry tell the truth?
+A: Let's think step by step.
+(1) Fidel tells the truth, so Fidel tells the truth.
+(2) Jerry says Fidel tells the truth. This is correct, so Jerry tells the truth.
+The answer is Yes.
+
+Q: Question: Kristian lies. Leda says Kristian tells the truth. Does Leda tell the truth?
+A: Let's think step by step.
+(1) Kristian lies, so Kristian does not tell the truth.
+(2) Leda says Kristian tells the truth. This is incorrect, so Leda lies.
+The answer is No."""
+
+WEB_OF_LIES_NOCOT_PROMPT = """Evaluate a random boolean function expressed as a word problem. Answer Yes or No.
+
+Q: Question: Fidel tells the truth. Jerry says Fidel tells the truth. Does Jerry tell the truth?
+A: The answer is Yes.
+
+Q: Question: Kristian lies. Leda says Kristian tells the truth. Does Leda tell the truth?
+A: The answer is No."""
+
+
+def curate_bigbench_web_of_lies_and_save_json(
+    source_json_path: str,
+    output_path: str,
+    reserve_json_path: Optional[str] = None,
+) -> pd.DataFrame:
+    """Create the flat candidate table consumed by patching and ablation.
+
+    ``source_json_path`` must be the fixed 64-question set produced by
+    ``prepare_bigbench_web_of_lies_datasets.py``.  The optional 32-question
+    reserve is appended after it so ``run_parallel.py`` can replace a target
+    item only when that model fails to reach the answer anchor.
+    """
+    def load_rows(path: str) -> List[Dict]:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        rows = payload.get("examples")
+        if not isinstance(rows, list) or not rows:
+            raise ValueError(f"Web of Lies source has no examples: {path}")
+        return rows
+
+    def convert_rows(rows: List[Dict], pool_split: str) -> List[Dict]:
+        records = []
+        for row in rows:
+            answer = str(row["gold_answer"]).strip().title()
+            if answer not in {"Yes", "No"}:
+                raise ValueError(f"unexpected Web of Lies answer: {row['gold_answer']!r}")
+            if int(row.get("chain_length", 0)) != 2:
+                raise ValueError("Web of Lies patching candidates must have two statements")
+            records.append({
+                "ID": str(row["id"]),
+                "source": "BIG-bench Web of Lies official two-statement generator",
+                "pool_split": pool_split,
+                "truth_pattern": str(row["truth_pattern"]),
+                "first_statement_truth": bool(row["first_statement_truth"]),
+                "second_statement_truth": bool(row["second_statement_truth"]),
+                "chain_length": 2,
+                "Type": str(row["truth_pattern"]),
+                "PromptWithoutExample": _collapse(row["input"]),
+                "Answer": answer,
+            })
+        return records
+
+    primary_records = convert_rows(load_rows(source_json_path), "primary")
+    reserve_records = (
+        convert_rows(load_rows(reserve_json_path), "reserve")
+        if reserve_json_path else []
+    )
+    df = pd.DataFrame(primary_records + reserve_records)
+
+    if df["ID"].duplicated().any():
+        raise ValueError("duplicate Web of Lies IDs across primary and reserve pools")
+    if df["PromptWithoutExample"].duplicated().any():
+        raise ValueError("duplicate Web of Lies questions across primary and reserve pools")
+
+    primary_counts = df[df["pool_split"] == "primary"].groupby("truth_pattern").size().to_dict()
+    expected_primary = {
+        "first_true__second_true": 16,
+        "first_true__second_false": 16,
+        "first_false__second_true": 16,
+        "first_false__second_false": 16,
+    }
+    if primary_counts != expected_primary:
+        raise ValueError(f"expected 16 primary rows per truth pattern, found {primary_counts}")
+    primary_answers = df[df["pool_split"] == "primary"]["Answer"].value_counts().to_dict()
+    if primary_answers != {"Yes": 32, "No": 32}:
+        raise ValueError(f"expected a 32/32 primary answer split, found {primary_answers}")
+
+    if reserve_records:
+        reserve_counts = df[df["pool_split"] == "reserve"].groupby("truth_pattern").size().to_dict()
+        expected_reserve = {key: 8 for key in expected_primary}
+        if reserve_counts != expected_reserve:
+            raise ValueError(f"expected 8 reserve rows per truth pattern, found {reserve_counts}")
+
+    # The generic runners select a TemplateSpec by CLI name.  These prompts
+    # are deliberately written rather than rendered by the generic templates:
+    # both demonstrations must remain length-matched to the two-statement task
+    # and end with the pipeline's standard "The answer is" anchor.
+    for template_key in ("step_by_step", "qa1shot"):
+        template = get_template(template_key)
+        df[template.cot_col] = [
+            f"{WEB_OF_LIES_COT_PROMPT}\n\nQ: Question: {question}\nA: Let's think step by step."
+            for question in df["PromptWithoutExample"]
+        ]
+        df[template.nocot_col] = [
+            f"{WEB_OF_LIES_NOCOT_PROMPT}\n\nQ: Question: {question}\nA: The answer is "
+            for question in df["PromptWithoutExample"]
+        ]
+
+    df.to_json(output_path, orient="records", indent=4, force_ascii=False)
+    print(
+        "BIG-bench Web of Lies: "
+        f"{len(primary_records)} primary + {len(reserve_records)} reserve -> {output_path}"
+    )
+    return df
+
+
+# ===========================================================================
 # Balanced subsets
 # ===========================================================================
 

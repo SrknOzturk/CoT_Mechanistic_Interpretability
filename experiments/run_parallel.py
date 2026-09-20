@@ -36,6 +36,7 @@ Usage:
 """
 
 import argparse
+from collections import Counter
 import glob
 import json
 import multiprocessing as mp
@@ -590,14 +591,44 @@ def _run_workers_until_processed(name, args, ids, id_column, data_path, ckpt_dir
         # loop back: pending is recomputed against the checkpoints just written
 
 
-def run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path, ref_path=None):
+def _draw_stratified_reserve(
+    reserve_pool,
+    accepted_ids,
+    target_by_stratum,
+    stratum_by_id,
+):
+    """Draw reserve ids only from the strata still below their target."""
+    accepted_by_stratum = Counter(stratum_by_id[str(i)] for i in accepted_ids)
+    needed = {
+        stratum: target - accepted_by_stratum[stratum]
+        for stratum, target in target_by_stratum.items()
+        if target > accepted_by_stratum[stratum]
+    }
+
+    pull, remaining = [], []
+    for example_id in reserve_pool:
+        stratum = stratum_by_id[str(example_id)]
+        if needed.get(stratum, 0) > 0:
+            pull.append(example_id)
+            needed[stratum] -= 1
+        else:
+            remaining.append(example_id)
+
+    unmet = {stratum: count for stratum, count in needed.items() if count > 0}
+    return pull, remaining, unmet
+
+
+def run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path,
+                   ref_path=None, stratum_by_id=None):
     """
     Processes `primary_ids` (the target count), then draws from `reserve_ids`
     one batch at a time to replace any that never reach the answer trigger --
     the same skip a base model can hit on any prompt, checked here rather than
     left to run_patchings.py alone since only the orchestrator knows there is
-    a reserve to draw from. Stops as soon as `len(primary_ids)` examples are
-    accepted, or the reserve runs out.
+    a reserve to draw from. When ``stratum_by_id`` is supplied, each failed
+    item is replaced by a reserve item from the same stratum, preserving the
+    composition of the primary dataset. Stops as soon as ``len(primary_ids)``
+    examples are accepted, or the appropriate reserve is exhausted.
 
     Because acceptance depends only on (model, CoT prompt) -- identical across
     normal/random_margin/random_jsd -- the same ids end up accepted for every
@@ -620,6 +651,10 @@ def run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path, r
 
     attempted = list(primary_ids)
     reserve_pool = list(reserve_ids)
+    target_by_stratum = (
+        Counter(stratum_by_id[str(i)] for i in primary_ids)
+        if stratum_by_id is not None else None
+    )
     round_no = 0
     t0 = time.time()
     accepted = []
@@ -642,11 +677,29 @@ def run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path, r
             print(f"[{name}] reserve exhausted -- stopping with {len(accepted)}/{target_n}")
             break
 
-        pull = reserve_pool[:shortfall]
-        reserve_pool = reserve_pool[len(pull):]
+        if target_by_stratum is None:
+            pull = reserve_pool[:shortfall]
+            reserve_pool = reserve_pool[len(pull):]
+        else:
+            pull, reserve_pool, unmet = _draw_stratified_reserve(
+                reserve_pool, accepted, target_by_stratum, stratum_by_id)
+            if not pull:
+                missing = ", ".join(
+                    f"{stratum}: {count}" for stratum, count in unmet.items()
+                )
+                print(f"[{name}] matching reserve exhausted for {missing} -- stopping with "
+                      f"{len(accepted)}/{target_n}")
+                break
         attempted += pull
         round_no += 1
-        print(f"[{name}] drawing {len(pull)} example(s) from reserve "
+        if target_by_stratum is None:
+            detail = ""
+        else:
+            drawn_by_stratum = Counter(stratum_by_id[str(i)] for i in pull)
+            detail = " (" + ", ".join(
+                f"{stratum}: {count}" for stratum, count in sorted(drawn_by_stratum.items())
+            ) + ")"
+        print(f"[{name}] drawing {len(pull)} example(s) from reserve{detail} "
               f"({len(reserve_pool)} left in reserve)")
 
     elapsed = time.time() - t0
@@ -811,6 +864,27 @@ def main():
           f"({len(primary_ids)} primary + {len(reserve_ids)} reserve) "
           f"(model={args.model}, task={task.key}, template={template.key})")
 
+    # Web of Lies was constructed as four equally sized truth-pattern groups.
+    # A prompt that fails to reach the answer anchor must be replaced inside its
+    # own group, otherwise a model-specific skip would silently unbalance the
+    # final 64-question dataset.
+    stratum_by_id = None
+    if args.dataset == "bigbench_web_of_lies":
+        stratum_column = "truth_pattern"
+        if stratum_column not in df.columns:
+            print(f"[ERROR] missing '{stratum_column}' column; re-run prepare_dataset.py")
+            sys.exit(1)
+        stratum_by_id = {
+            str(example_id): str(stratum)
+            for example_id, stratum in zip(df[id_column], df[stratum_column])
+        }
+        primary_counts = Counter(stratum_by_id[i] for i in primary_ids)
+        reserve_counts = Counter(stratum_by_id[i] for i in reserve_ids)
+        print("Web of Lies truth-pattern balance: primary "
+              + ", ".join(f"{key}={value}" for key, value in sorted(primary_counts.items()))
+              + "; reserve "
+              + ", ".join(f"{key}={value}" for key, value in sorted(reserve_counts.items())))
+
     for name in args.experiments:
         if name in rp.RANDOM_REFERENCE_MULTI:
             refs, missing_refs = {}, []
@@ -841,7 +915,7 @@ def main():
             ref_path = None
 
         result = run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path,
-                                ref_path=ref_path)
+                                ref_path=ref_path, stratum_by_id=stratum_by_id)
 
         if args.ablation and result:
             _run_ablation_stage(

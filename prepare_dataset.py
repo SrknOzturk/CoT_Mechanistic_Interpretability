@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.data_loader import (
     curate_bigbench_boolean_expressions_and_save_json,
+    curate_bigbench_web_of_lies_and_save_json,
     PRONTOQA_STRATIFY,
     SVAMP_STRATIFY,
     create_and_save_balanced_subset,
@@ -50,6 +51,16 @@ BIGBENCH_BOOLEAN_RESERVE = os.path.join(
 )
 BIGBENCH_BOOLEAN_POOL = os.path.join(
     PROCESSED, "bigbench_boolean_expressions_candidates.json"
+)
+
+WEB_OF_LIES_SOURCE = os.path.join(
+    PROCESSED, "bigbench_web_of_lies_length2_balanced64.json"
+)
+WEB_OF_LIES_RESERVE = os.path.join(
+    PROCESSED, "bigbench_web_of_lies_length2_backup32.json"
+)
+WEB_OF_LIES_POOL = os.path.join(
+    PROCESSED, "bigbench_web_of_lies_candidates.json"
 )
 
 # The experiments keep TARGET_N examples per dataset. The pools below are
@@ -82,7 +93,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--only",
-        choices=["svamp", "prontoqa", "bigbench_boolean_expressions"],
+        choices=["svamp", "prontoqa", "bigbench_boolean_expressions", "bigbench_web_of_lies"],
         default=None,
     )
     ap.add_argument("--seed", type=int, default=42)
@@ -147,6 +158,26 @@ def main():
                 BIGBENCH_BOOLEAN_SOURCE,
                 BIGBENCH_BOOLEAN_POOL,
                 reserve_json_path=BIGBENCH_BOOLEAN_RESERVE,
+            )
+
+    if args.only in (None, "bigbench_web_of_lies"):
+        print()
+        print("=" * 60)
+        print("BIG-bench Web of Lies")
+        print("=" * 60)
+        missing_web_of_lies_files = [
+            path for path in (WEB_OF_LIES_SOURCE, WEB_OF_LIES_RESERVE)
+            if not os.path.exists(path)
+        ]
+        if missing_web_of_lies_files:
+            print(f"  [skip] fixed source file(s) not found: {missing_web_of_lies_files}")
+            print("  create them with:")
+            print("    python experiments/prepare_bigbench_web_of_lies_datasets.py")
+        else:
+            curate_bigbench_web_of_lies_and_save_json(
+                WEB_OF_LIES_SOURCE,
+                WEB_OF_LIES_POOL,
+                reserve_json_path=WEB_OF_LIES_RESERVE,
             )
 
     print()
