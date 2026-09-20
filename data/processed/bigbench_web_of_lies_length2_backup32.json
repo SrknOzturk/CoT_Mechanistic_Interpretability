@@ -1,0 +1,319 @@
+{
+  "dataset": "bigbench_web_of_lies_length2_backup32",
+  "source": "BIG-bench Web of Lies official two-statement generator",
+  "selection_seed": 20260918,
+  "chain_length": 2,
+  "selection": {
+    "per_truth_pattern": 8,
+    "truth_patterns": [
+      "first_true__second_true",
+      "first_true__second_false",
+      "first_false__second_true",
+      "first_false__second_false"
+    ],
+    "disjoint_from": "the other fixed Web of Lies length-2 dataset"
+  },
+  "summary": {
+    "n": 32,
+    "gold_distribution": {
+      "Yes": 16,
+      "No": 16
+    },
+    "truth_pattern_distribution": {
+      "first_false__second_false": 8,
+      "first_true__second_true": 8,
+      "first_true__second_false": 8,
+      "first_false__second_true": 8
+    }
+  },
+  "examples": [
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_001",
+      "input": "Crista lies. Sima says Crista lies. Does Sima tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": false,
+      "truth_pattern": "first_false__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_002",
+      "input": "Shaunda tells the truth. Delfina says Shaunda tells the truth. Does Delfina tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": true,
+      "truth_pattern": "first_true__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_003",
+      "input": "Audrie lies. Phoebe says Audrie lies. Does Phoebe tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": false,
+      "truth_pattern": "first_false__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_004",
+      "input": "Ryan tells the truth. Michael says Ryan tells the truth. Does Michael tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": true,
+      "truth_pattern": "first_true__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_005",
+      "input": "Sal tells the truth. Inga says Sal tells the truth. Does Inga tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": true,
+      "truth_pattern": "first_true__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_006",
+      "input": "Sal tells the truth. Osvaldo says Sal tells the truth. Does Osvaldo tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": true,
+      "truth_pattern": "first_true__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_007",
+      "input": "Vernell tells the truth. Raymond says Vernell lies. Does Raymond tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": false,
+      "truth_pattern": "first_true__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_008",
+      "input": "Shenna tells the truth. Michael says Shenna tells the truth. Does Michael tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": true,
+      "truth_pattern": "first_true__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_009",
+      "input": "Christie tells the truth. Ryan says Christie tells the truth. Does Ryan tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": true,
+      "truth_pattern": "first_true__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_010",
+      "input": "Michaela tells the truth. Yoland says Michaela tells the truth. Does Yoland tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": true,
+      "truth_pattern": "first_true__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_011",
+      "input": "Shalonda tells the truth. Alejandro says Shalonda lies. Does Alejandro tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": false,
+      "truth_pattern": "first_true__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_012",
+      "input": "Osvaldo tells the truth. Jim says Osvaldo lies. Does Jim tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": false,
+      "truth_pattern": "first_true__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_013",
+      "input": "Dallas tells the truth. Crista says Dallas lies. Does Crista tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": false,
+      "truth_pattern": "first_true__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_014",
+      "input": "Andree lies. Conception says Andree tells the truth. Does Conception tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": true,
+      "truth_pattern": "first_false__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_015",
+      "input": "Maybelle lies. Fidel says Maybelle lies. Does Fidel tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": false,
+      "truth_pattern": "first_false__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_016",
+      "input": "Delfina lies. Lorine says Delfina tells the truth. Does Lorine tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": true,
+      "truth_pattern": "first_false__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_017",
+      "input": "Fidel tells the truth. Dallas says Fidel lies. Does Dallas tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": false,
+      "truth_pattern": "first_true__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_018",
+      "input": "Willian tells the truth. Shaunda says Willian lies. Does Shaunda tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": false,
+      "truth_pattern": "first_true__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_019",
+      "input": "Andree lies. Tamika says Andree lies. Does Tamika tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": false,
+      "truth_pattern": "first_false__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_020",
+      "input": "Jerry lies. Inga says Jerry tells the truth. Does Inga tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": true,
+      "truth_pattern": "first_false__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_021",
+      "input": "Shaunda lies. Elanor says Shaunda lies. Does Elanor tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": false,
+      "truth_pattern": "first_false__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_022",
+      "input": "Jaymie lies. Teressa says Jaymie tells the truth. Does Teressa tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": true,
+      "truth_pattern": "first_false__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_023",
+      "input": "Yoland lies. Leda says Yoland tells the truth. Does Leda tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": true,
+      "truth_pattern": "first_false__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_024",
+      "input": "Tamika lies. Leda says Tamika tells the truth. Does Leda tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": true,
+      "truth_pattern": "first_false__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_025",
+      "input": "Christie lies. Alejandro says Christie tells the truth. Does Alejandro tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": true,
+      "truth_pattern": "first_false__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_026",
+      "input": "Shaunda tells the truth. Gwenn says Shaunda lies. Does Gwenn tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": false,
+      "truth_pattern": "first_true__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_027",
+      "input": "Vernell lies. Sal says Vernell lies. Does Sal tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": false,
+      "truth_pattern": "first_false__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_028",
+      "input": "Jaymie lies. Rashida says Jaymie tells the truth. Does Rashida tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": true,
+      "truth_pattern": "first_false__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_029",
+      "input": "Tamika tells the truth. Bernita says Tamika lies. Does Bernita tell the truth?",
+      "gold_answer": "No",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": false,
+      "truth_pattern": "first_true__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_030",
+      "input": "Alejandro tells the truth. Dallas says Alejandro tells the truth. Does Dallas tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": true,
+      "second_statement_truth": true,
+      "truth_pattern": "first_true__second_true"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_031",
+      "input": "Vina lies. Leda says Vina lies. Does Leda tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": false,
+      "truth_pattern": "first_false__second_false"
+    },
+    {
+      "id": "bigbench_web_of_lies_length2_backup32_032",
+      "input": "Conception lies. Vernell says Conception lies. Does Vernell tell the truth?",
+      "gold_answer": "Yes",
+      "chain_length": 2,
+      "first_statement_truth": false,
+      "second_statement_truth": false,
+      "truth_pattern": "first_false__second_false"
+    }
+  ]
+}
