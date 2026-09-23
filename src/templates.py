@@ -43,6 +43,12 @@ class TemplateSpec:
     corrupt_suffix: str
     render_cot: Callable[[Dict, Demo], str]
     render_nocot: Callable[[Dict, Demo], str]
+    # Which writing of the demonstration's reasoning this template shows. A cue
+    # that asks for a plan needs a demonstration containing one, so the
+    # plan-and-solve template reads a differently written reasoning for the same
+    # demonstration question. Resolved by the caller; renderers always read
+    # item["reasoning"].
+    reasoning_key: str = "reasoning"
 
     @property
     def cot_col(self) -> str:
@@ -82,6 +88,41 @@ def _nocot_step_by_step(target: Dict, demo: Demo) -> str:
 
 
 # ---------------------------------------------------------------------------
+# plan_solve_plus -- Plan-and-Solve+ prompting, Wang et al., ACL 2023
+# ("Plan-and-Solve Prompting: Improving Zero-Shot Chain-of-Thought Reasoning by
+# Large Language Models"), with two deliberate departures from the paper:
+#
+#   * the paper is zero-shot and two-stage -- it generates the reasoning, then
+#     re-prompts with "Therefore, the answer (arabic numerals) is" to read the
+#     answer off. Here the structure stays few-shot and single-pass, so the
+#     demonstration carries the Plan/Solution format and the answer anchor is
+#     reached in the same generation.
+#   * the answer anchor stays "The answer is ". It is the patching site, and
+#     "(arabic numerals)" would not fit a True/False task anyway.
+#
+# So the manipulation remains the cue alone, now a plan-and-solve cue instead of
+# "Let's think step by step."
+# ---------------------------------------------------------------------------
+
+PLAN_SOLVE_PLUS = (
+    "Let's first understand the problem, extract relevant variables and their "
+    "corresponding numerals, and devise a complete plan. Then, let's carry out "
+    "the plan, calculate intermediate variables (pay attention to correct "
+    "numerical calculation and commonsense), solve the problem step by step, "
+    "and show the answer."
+)
+
+
+def _cot_plan_solve_plus(target: Dict, demo: Demo) -> str:
+    prefix = "".join(
+        f"Q: {item['question']} "
+        f"A: {PLAN_SOLVE_PLUS} {item['reasoning']} {ANSWER_TRIGGER}{item['answer']}. "
+        for item in _as_demos(demo)
+    )
+    return f"{prefix}Q: {target['question']} A: {PLAN_SOLVE_PLUS}"
+
+
+# ---------------------------------------------------------------------------
 # qa1shot -- the structure used for the submitted version. Retained so the
 # refactor can be checked against the existing results, not for new runs.
 # ---------------------------------------------------------------------------
@@ -106,6 +147,14 @@ TEMPLATES: Dict[str, TemplateSpec] = {
         corrupt_suffix=" " + ANSWER_TRIGGER,
         render_cot=_cot_step_by_step,
         render_nocot=_nocot_step_by_step,
+    ),
+    "plan_solve_plus": TemplateSpec(
+        key="plan_solve_plus",
+        description="Plan-and-Solve+ (PS+) cue, Wang et al. 2023; SVAMP only",
+        corrupt_suffix=" " + ANSWER_TRIGGER,
+        render_cot=_cot_plan_solve_plus,
+        render_nocot=_nocot_step_by_step,
+        reasoning_key="reasoning_plan_solve_plus",
     ),
     "qa1shot": TemplateSpec(
         key="qa1shot",

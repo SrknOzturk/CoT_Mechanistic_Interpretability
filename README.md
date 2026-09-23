@@ -11,7 +11,7 @@ Models, datasets and prompt templates are registry entries rather than code path
 |---|---|
 | Models (`src/models.py`) | `qwen2.5-0.5b`, `olmo2-1b`, `llama3.2-1b` (all base, all float32) |
 | Datasets (`src/tasks.py`) | `svamp` (numeric), `prontoqa` (True/False), `bigbench_boolean_expressions` (balanced lengths 4/5/6) |
-| Templates (`src/templates.py`) | `step_by_step` (default), `qa1shot` |
+| Templates (`src/templates.py`) | `step_by_step` (default), `qa1shot`, `plan_solve_plus` (SVAMP only) |
 
 ## 📂 Repository Structure
 ```text

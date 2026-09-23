@@ -40,6 +40,27 @@ def _collapse(s: str) -> str:
     return " ".join(str(s).split())
 
 
+def _select_reasoning(demo, key: str):
+    """
+    Returns the demonstration(s) with "reasoning" set to the requested writing.
+
+    Missing is an error rather than a fallback: silently showing a step-by-step
+    demonstration under a plan-and-solve cue would run the experiment with the
+    wrong prompt and nothing downstream would notice.
+    """
+    if key == "reasoning":
+        return demo
+    items = demo if isinstance(demo, list) else [demo]
+    out = []
+    for item in items:
+        if key not in item:
+            raise KeyError(
+                f"demonstration has no {key!r}; add it next to 'reasoning' for this dataset"
+            )
+        out.append({**item, "reasoning": item[key]})
+    return out if isinstance(demo, list) else out[0]
+
+
 def _add_prompt_columns(
     df: pd.DataFrame,
     cot_demo: Dict[str, str],
@@ -59,9 +80,12 @@ def _add_prompt_columns(
     for key in keys:
         spec: TemplateSpec = get_template(key)
         cot_col, nocot_col = [], []
+        # a plan-and-solve cue needs a demonstration that shows a plan; the
+        # template names which writing of the same demonstration it wants
+        demo_for_spec = _select_reasoning(cot_demo, spec.reasoning_key)
         for (_, row), nocot_demo in zip(df.iterrows(), nocot_demos):
             target = {"question": row["PromptWithoutExample"]}
-            cot_col.append(spec.render_cot(target, cot_demo))
+            cot_col.append(spec.render_cot(target, demo_for_spec))
             nocot_col.append(spec.render_nocot(target, nocot_demo))
         df[spec.cot_col] = cot_col
         df[spec.nocot_col] = nocot_col
@@ -89,10 +113,26 @@ SVAMP_COT_DEMO = {
         "Roger started with 5 balls. Each can has 3 balls, so total balls from cans = 2 * 3 = 6. "
         "Then total = 5 + 6 = 11."
     ),
+    # The same demonstration written for the PS+ cue: the Plan: / Solution:
+    # layout of Figure 2 in Wang et al. 2023, plus the variable extraction the
+    # cue asks for.
+    "reasoning_plan_solve_plus": (
+        "Variables: balls Roger started with = 5, cans bought = 2, balls per can = 3. "
+        "Plan: Step 1: Work out how many tennis balls are in the cans. "
+        "Step 2: Add those balls to the ones Roger already had. "
+        "Solution: Step 1: 2 cans * 3 balls per can = 6 balls. "
+        "Step 2: 5 balls + 6 balls = 11 balls."
+    ),
     "answer": "11",
 }
 
 SVAMP_STRATIFY = ("OperationCount", "Type")
+
+# Plan-and-Solve is being trialled on SVAMP only; rendering it elsewhere would
+# add prompt columns no run reads and demand a plan-shaped demonstration the
+# other datasets have no reason to define.
+SVAMP_TEMPLATES = ("step_by_step", "qa1shot", "plan_solve_plus")
+PRONTOQA_TEMPLATES = ("step_by_step", "qa1shot")
 
 
 def curate_svamp_and_save_json(raw_json_path: str, output_path: str,
@@ -121,7 +161,7 @@ def curate_svamp_and_save_json(raw_json_path: str, output_path: str,
                    for q, a in zip(demo_bq, demo_a)]
 
     df["Answer"] = df["Answer"].astype(str)
-    df = _add_prompt_columns(df, SVAMP_COT_DEMO, nocot_demos, templates)
+    df = _add_prompt_columns(df, SVAMP_COT_DEMO, nocot_demos, templates or SVAMP_TEMPLATES)
 
     df.to_json(output_path, orient="records", indent=4)
     print(f"SVAMP: {len(df)} examples -> {output_path}")
@@ -208,7 +248,7 @@ def curate_prontoqa_and_save_json(
     # No-CoT prompts.  Only the reasoning cue/trace is removed on the No-CoT
     # side; changing the exemplar as well would confound activation patching.
     nocot_demos = [cot_demo] * len(df)
-    df = _add_prompt_columns(df, cot_demo, nocot_demos, templates)
+    df = _add_prompt_columns(df, cot_demo, nocot_demos, templates or PRONTOQA_TEMPLATES)
 
     df.to_json(output_path, orient="records", indent=4)
     print(f"ProntoQA: {len(df)} examples -> {output_path}")
