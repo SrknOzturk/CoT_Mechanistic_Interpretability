@@ -41,7 +41,7 @@ from src.metrics import (
 )
 from src.tasks import TASKS, AnswerTriggerNotFound, get_task
 from src.templates import DEFAULT_TEMPLATE, TEMPLATES, get_template
-from src.patching import patch_attn_head_out_last_pos
+from src.patching import patch_attn_head_out_last_pos, patch_mlp_out_last_pos
 from src.patching_pipelines import patching_pipeline
 
 
@@ -1284,6 +1284,7 @@ def sequential_random_patching_dual_metric(
     checkpoint_path=None,
     decoding=None,
     max_generation_steps=1024,
+    component="head",
 ):
     """
     Random-Gaussian control, scoring margin and JSD from one sweep.
@@ -1337,8 +1338,10 @@ def sequential_random_patching_dual_metric(
                 reference_heads_maps[name][str(item["example_id"])] = int(count)
 
     n_layers = model.cfg.n_layers
-    n_heads = model.cfg.n_heads
-    d_head = model.cfg.d_head
+    # an MLP unit is a whole layer: one per layer, as wide as the residual
+    n_heads = 1 if component == "mlp" else model.cfg.n_heads
+    d_head = model.cfg.d_model if component == "mlp" else model.cfg.d_head
+    rand_site = "hook_mlp_out" if component == "mlp" else "attn.hook_z"
     done = _load_checkpoint(checkpoint_path)
 
     exports = {name: [] for name in METRICS}
@@ -1396,13 +1399,16 @@ def sequential_random_patching_dual_metric(
 
                 def rand_hook(value, hook, layer=l, head=h, vec=z_rand):
                     v = value.clone()
-                    v[:, v.shape[1] - 1, head, :] = vec
+                    if component == "mlp":
+                        v[:, v.shape[1] - 1, :] = vec
+                    else:
+                        v[:, v.shape[1] - 1, head, :] = vec
                     return v
 
                 with torch.no_grad():
                     patched_logits_single = model.run_with_hooks(
                         corrupted_tokens,
-                        fwd_hooks=[(f"blocks.{l}.attn.hook_z", rand_hook)],
+                        fwd_hooks=[(f"blocks.{l}.{rand_site}", rand_hook)],
                         return_type="logits"
                     )[0, -1, :]
 
@@ -1423,17 +1429,7 @@ def sequential_random_patching_dual_metric(
                 l, h = info["layer"], info["head"]
                 layer_to_specs[l].append({"head": h, "vec": z_table[(l, h)]})
 
-            def make_multi_hook(specs):
-                def hook_fn(value, hook):
-                    v = value.clone()
-                    last_pos = v.shape[1] - 1
-                    for spec in specs:
-                        v[:, last_pos, spec["head"], :] = spec["vec"].to(v.device, v.dtype)
-                    return v
-                return hook_fn
-
-            hooks = [(f"blocks.{layer}.attn.hook_z", make_multi_hook(specs))
-                     for layer, specs in layer_to_specs.items()]
+            hooks = _joint_patch_hooks(layer_to_specs, component)
 
             with torch.no_grad():
                 patched_logits_topn = model.run_with_hooks(
@@ -1458,6 +1454,7 @@ def sequential_random_patching_dual_metric(
                 "skipped": False,
                 "skip_reason": None,
                 "t_true_token_id": t_true,
+                **({"component": component} if component != "head" else {}),
                 "metrics": {
                     "no_cot_logit": no_cot_t_true_logit,
                     "clean_cot_logit": clean_cot_t_true_logit,
@@ -1496,6 +1493,30 @@ def sequential_random_patching_dual_metric(
     return exports
 
 
+def _joint_patch_hooks(layer_to_specs, component="head"):
+    """
+    Hooks that write each selected unit's stored vector into the last position.
+
+    A head unit replaces one head slice of hook_z; an MLP unit replaces the
+    layer's whole hook_mlp_out (its specs carry head index 0).
+    """
+    def make_hook(specs):
+        def hook_fn(value, hook):
+            v = value.clone()
+            last_pos = v.shape[1] - 1
+            for spec in specs:
+                if component == "mlp":
+                    v[:, last_pos, :] = spec["vec"].to(v.device, v.dtype)
+                else:
+                    v[:, last_pos, spec["head"], :] = spec["vec"].to(v.device, v.dtype)
+            return v
+        return hook_fn
+
+    site = "hook_mlp_out" if component == "mlp" else "attn.hook_z"
+    return [(f"blocks.{layer}.{site}", make_hook(specs))
+            for layer, specs in layer_to_specs.items()]
+
+
 def multi_head_patching_dual_metric(
     df,
     model,
@@ -1510,6 +1531,7 @@ def multi_head_patching_dual_metric(
     template=None,
     checkpoint_path=None,
     decoding=None,
+    component="head",
 ):
     """
     One sequential scan of the CoT trace that scores margin and JSD together.
@@ -1600,6 +1622,7 @@ def multi_head_patching_dual_metric(
 
         clean_prefix_tokens = model.to_tokens(
             cot_prompt, prepend_bos=True).to(device)
+        patch_fn = patch_mlp_out_last_pos if component == "mlp" else patch_attn_head_out_last_pos
         banks = {name: {} for name in METRICS}
         pos_hms = {name: defaultdict(list) for name in METRICS}
         token_level = {name: [] for name in METRICS}
@@ -1612,7 +1635,7 @@ def multi_head_patching_dual_metric(
                 clean_prefix_tokens,
                 corrupted_tokens,
                 metric=bound,
-                patching_function=patch_attn_head_out_last_pos,
+                patching_function=patch_fn,
                 clean_reference_logits=clean_reference_logits,
             )
 
@@ -1625,13 +1648,14 @@ def multi_head_patching_dual_metric(
             with torch.no_grad():
                 _, clean_cache_ld = model.run_with_cache(clean_tokens_ld)
 
-            nh = model.cfg.n_heads
+            nh = 1 if component == "mlp" else model.cfg.n_heads
             for name, cfg in METRICS.items():
                 hm = hms[name]
                 hm_cpu = hm.detach().cpu()
                 pos_hms[name][pos_label].append(hm_cpu)
                 banks[name][pos_label] = cfg["merge"](
-                    banks[name].get(pos_label, []), hm, clean_cache_ld, nh, heads_per_pos
+                    banks[name].get(pos_label, []), hm, clean_cache_ld, nh, heads_per_pos,
+                    component=component,
                 )
 
                 flat = hm.flatten()
@@ -1680,17 +1704,7 @@ def multi_head_patching_dual_metric(
             for (layer, head), info in merged.items():
                 layer_to_specs[layer].append({"head": head, "vec": info["vec"]})
 
-            def make_hook(specs):
-                def hook_fn(value, hook):
-                    v = value.clone()
-                    last_pos = v.shape[1] - 1
-                    for spec in specs:
-                        v[:, last_pos, spec["head"], :] = spec["vec"].to(v.device, v.dtype)
-                    return v
-                return hook_fn
-
-            hooks = [(f"blocks.{layer}.attn.hook_z", make_hook(specs))
-                     for layer, specs in layer_to_specs.items()]
+            hooks = _joint_patch_hooks(layer_to_specs, component)
 
             with torch.no_grad():
                 patched_logits = model.run_with_hooks(
@@ -1713,6 +1727,7 @@ def multi_head_patching_dual_metric(
                 "skipped": False,
                 "skip_reason": None,
                 "t_true_token_id": t_true,
+                **({"component": component} if component != "head" else {}),
                 "metrics": {
                     "no_cot_logit": no_cot_t_true_logit,
                     "clean_cot_logit": clean_cot_t_true_logit,
@@ -1808,9 +1823,19 @@ RANDOM_REFERENCE_MULTI = {
 
 DEFAULT_ORDER = ["normal", "random"]
 
+# The unit a run patches and ablates. "head" is an attention head's output
+# (hook_z); "mlp" is a whole layer's MLP output (hook_mlp_out), stored as a
+# single unit per layer with head index 0 so every record keeps the
+# {layer, head} schema the selection, ablation and analysis code reads.
+COMPONENTS = ("head", "mlp")
+# only the dual-metric experiments know how to patch an MLP output
+COMPONENT_EXPERIMENTS = ("normal", "random")
 
-def run_id(model_name, dataset, experiment, template):
-    return f"{model_name}__{dataset}__{template}__{experiment}"
+
+def run_id(model_name, dataset, experiment, template, component="head"):
+    # head runs keep their original names so existing results stay addressable
+    tag = template if component == "head" else f"{template}__{component}"
+    return f"{model_name}__{dataset}__{tag}__{experiment}"
 
 
 def main():

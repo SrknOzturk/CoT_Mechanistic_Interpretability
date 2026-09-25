@@ -520,12 +520,20 @@ def print_top10_with_logits_and_entropy(logits_1d, model, title, k=10):
     print("-" * 80)
 
 
+def _clean_unit_vector(clean_cache, layer, head, component="head"):
+    """The clean activation a selected unit is patched with, at the last position."""
+    if component == "mlp":
+        return clean_cache["mlp_out", layer][0, -1, :].detach().cpu().clone()
+    return clean_cache["z", layer][0, -1, head, :].detach().cpu().clone()
+
+
 def _merge_top_heads_for_pos_margin_ratio(
     existing: list,
     heatmap: torch.Tensor,
     clean_cache,
     n_heads: int,
     k: int,
+    component: str = "head",
 ) -> list:
     """Retrieves the top-k cells from the heatmap at each step; preserves the highest score and vector per (layer, head)."""
     flat = heatmap.flatten()
@@ -544,8 +552,7 @@ def _merge_top_heads_for_pos_margin_ratio(
         layer = li // n_heads
         head = li % n_heads
         key = (layer, head)
-        clean_z = clean_cache["z", layer]
-        vec = clean_z[0, -1, head, :].detach().cpu().clone()
+        vec = _clean_unit_vector(clean_cache, layer, head, component)
         cand = {"score": score, "layer": layer, "head": head, "vec": vec}
         
         if key not in by_key or score > by_key[key]["score"]:
@@ -554,7 +561,7 @@ def _merge_top_heads_for_pos_margin_ratio(
     return sorted(by_key.values(), key=lambda x: -x["score"])[:k]
 
 
-def _merge_top_heads_for_pos_jsd(prev_entries, hm, clean_cache, nh, k):
+def _merge_top_heads_for_pos_jsd(prev_entries, hm, clean_cache, nh, k, component="head"):
     """
     Updated Top-K Head merging function specifically for the JSD metric.
     Unlike Margin scores, the lowest score (closest to 0) is the best for JSD.
@@ -567,8 +574,7 @@ def _merge_top_heads_for_pos_jsd(prev_entries, hm, clean_cache, nh, k):
     current_entries = []
     for val, idx in zip(topk_vals, topk_indices):
         l, h = divmod(idx.item(), nh)
-        hook_name = f"blocks.{l}.attn.hook_z"
-        vec = clean_cache[hook_name][0, -1, h, :]
+        vec = _clean_unit_vector(clean_cache, l, h, component)
         
         current_entries.append({
             "layer": l,
@@ -657,7 +663,7 @@ def group_heads_by_layer(heads):
     return layer_dict
 
 
-def make_zero_ablation_hooks(heads):
+def make_zero_ablation_hooks(heads, component="head"):
     """
     Verilen [(layer, head), ...] listesindeki attention head'lerin
     hook_z aktivasyonlarını sıfırlar.
@@ -673,6 +679,15 @@ def make_zero_ablation_hooks(heads):
     """
     if not heads:
         return []
+
+    if component == "mlp":
+        # an MLP unit is a whole layer's output: silence it at every position
+        def zero_mlp(value, hook):
+            value[:] = 0.0
+            return value
+
+        layers = sorted({int(layer) for layer, _ in heads})
+        return [(f"blocks.{layer}.hook_mlp_out", zero_mlp) for layer in layers]
 
     layer_dict = group_heads_by_layer(heads)
     hooks = []
@@ -690,13 +705,20 @@ def make_zero_ablation_hooks(heads):
     return hooks
 
 
-def sample_random_heads_matched_layers_for_example(model, selected_heads_list, seed=42):
+def sample_random_heads_matched_layers_for_example(model, selected_heads_list, seed=42,
+                                                   component="head"):
     """
     Direct Equation için layer-matched random control.
 
     Selected heads hangi layer'larda kaç tane ise,
     random heads de aynı layer'lardan aynı sayıda seçilir.
     """
+    if component == "mlp":
+        # the unit is the layer itself, so "same layers" would mean the same
+        # units; an unconstrained draw of the same size is the only control
+        return sample_random_heads_same_count_for_example(
+            model, len(selected_heads_list), seed=seed, component=component)
+
     random.seed(seed)
 
     n_heads = model.cfg.n_heads
@@ -717,7 +739,7 @@ def sample_random_heads_matched_layers_for_example(model, selected_heads_list, s
     return random_heads
 
 
-def sample_random_heads_same_count_for_example(model, num_heads, seed=42):
+def sample_random_heads_same_count_for_example(model, num_heads, seed=42, component="head"):
     """
     No-CoT ve CoT için aynı sayıda random head control.
     Layer matching yapmaz, bütün layer-head havuzundan seçer.
@@ -725,7 +747,7 @@ def sample_random_heads_same_count_for_example(model, num_heads, seed=42):
     random.seed(seed)
 
     n_layers = model.cfg.n_layers
-    n_heads = model.cfg.n_heads
+    n_heads = 1 if component == "mlp" else model.cfg.n_heads
 
     all_heads = [(layer, head) for layer in range(n_layers) for head in range(n_heads)]
 

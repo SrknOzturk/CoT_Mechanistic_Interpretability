@@ -164,6 +164,9 @@ def _worker_main(cfg):
             if name in _rp.RANDOM_REFERENCE:
                 kwargs["reference_json_path"] = cfg["reference_json_path"]
 
+        if cfg["component"] != "head":
+            kwargs["component"] = cfg["component"]
+
         _rp.EXPERIMENTS[name](**kwargs)
         _sys.exit(0)
 
@@ -366,6 +369,7 @@ def _ablation_worker_main(cfg):
                       else "max_new_tokens")
         runner(shard_df, model, curated_heads, task=task, template=template,
               checkpoint_path=cfg["checkpoint_path"],
+              component=cfg["component"],
               decoding=_DecodingConfig(
                   repetition_penalty=cfg["repetition_penalty"],
                   no_repeat_ngram_size=cfg["no_repeat_ngram_size"],
@@ -421,6 +425,7 @@ def _run_ablation_workers_until_processed(label, args, ids, id_column, data_path
                 template=args.template, id_column=id_column, condition=condition,
                 checkpoint_path=ckpt_path, shard_ids=shard_ids,
                 data_path=data_path, curated_heads_path=curated_heads_path,
+                component=getattr(args, "component", "head"),
                 ablation_max_new_tokens=args.ablation_max_new_tokens,
                 repetition_penalty=args.repetition_penalty,
                 no_repeat_ngram_size=args.no_repeat_ngram_size,
@@ -559,6 +564,7 @@ def _run_workers_until_processed(name, args, ids, id_column, data_path, ckpt_dir
                 ctx=args.ctx, heads_per_pos=args.heads_per_pos, max_steps=args.max_steps,
                 seed=args.seed, checkpoint_path=ckpt_path, shard_ids=shard_ids,
                 data_path=data_path, reference_json_path=ref_path,
+                component=args.component,
                 repetition_penalty=args.repetition_penalty,
                 no_repeat_ngram_size=args.no_repeat_ngram_size,
             )
@@ -636,7 +642,7 @@ def run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path,
     --target-n/--n against the same candidate file.
     """
     target_n = len(primary_ids)
-    base = rp.run_id(args.model, args.dataset, name, args.template)
+    base = rp.run_id(args.model, args.dataset, name, args.template, args.component)
     ckpt_dir = os.path.join(args.out_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
     pattern = os.path.join(ckpt_dir, f"{base}.attempt*.worker*.jsonl")
@@ -746,7 +752,7 @@ def _run_ablation_stage(args, task, template, experiment, result, id_column, dat
     ablation_out_dir = os.path.join(args.out_dir, "ablation")
     os.makedirs(ablation_out_dir, exist_ok=True)
 
-    base = rp.run_id(args.model, args.dataset, experiment, args.template)
+    base = rp.run_id(args.model, args.dataset, experiment, args.template, args.component)
     summary = []
     multi_output = experiment in rp.MULTI_OUTPUT
     for metric, records in outputs:
@@ -789,7 +795,17 @@ def main():
                     help="limit the candidate pool to the first N rows before splitting into "
                          "--target-n primary + reserve (default: use the whole file)")
     ap.add_argument("--ctx", type=int, default=2048)
-    ap.add_argument("--heads-per-pos", type=int, default=3)
+    ap.add_argument("--heads-per-pos", type=int, default=3,
+                    help="units selected per POS category: attention heads, or MLP layers "
+                         "with --component mlp (default: 3)")
+    ap.add_argument("--data-file", default=None,
+                    help="candidate file under data/processed to draw examples from instead "
+                         "of the dataset's own (e.g. a held-out pilot subset); it must carry "
+                         "the same columns")
+    ap.add_argument("--component", choices=rp.COMPONENTS, default="head",
+                    help="what to patch and ablate: attention-head outputs (default) or "
+                         "whole MLP layer outputs; mlp results are written under their "
+                         "own names and never touch the head results")
     ap.add_argument("--max-steps", type=int, default=1024,
                     help="patching: cap on reasoning steps swept per example (default: 1024)")
     ap.add_argument("--ablation-max-new-tokens", type=int, default=2048,
@@ -827,9 +843,15 @@ def main():
                     help="print the sharding plan and exit without loading a model or spawning workers")
     args = ap.parse_args()
 
+    unsupported = [e for e in args.experiments if e not in rp.COMPONENT_EXPERIMENTS]
+    if args.component != "head" and unsupported:
+        ap.error(f"--component {args.component} supports only the "
+                 f"{', '.join(rp.COMPONENT_EXPERIMENTS)} experiments, not {', '.join(unsupported)}")
+
     os.makedirs(args.out_dir, exist_ok=True)
 
-    data_path = os.path.join(REPO_ROOT, "data", "processed", rp.DATASETS[args.dataset])
+    data_path = os.path.join(REPO_ROOT, "data", "processed",
+                             args.data_file or rp.DATASETS[args.dataset])
     if not os.path.exists(data_path):
         print(f"[ERROR] dataset not found: {data_path}")
         sys.exit(1)
@@ -860,7 +882,7 @@ def main():
               f"raise the per-group sample count in prepare_dataset.py)")
         sys.exit(1)
     primary_ids, reserve_ids = all_ids[:args.target_n], all_ids[args.target_n:]
-    print(f"Loaded {len(all_ids)} candidates from {rp.DATASETS[args.dataset]} "
+    print(f"Loaded {len(all_ids)} candidates from {os.path.basename(data_path)} "
           f"({len(primary_ids)} primary + {len(reserve_ids)} reserve) "
           f"(model={args.model}, task={task.key}, template={template.key})")
 
@@ -891,7 +913,7 @@ def main():
             for metric, ref_spec in rp.RANDOM_REFERENCE_MULTI[name].items():
                 ref_exp, ref_metric = ref_spec.split("__")
                 path = os.path.join(
-                    args.out_dir, rp.run_id(args.model, args.dataset, ref_exp, args.template)
+                    args.out_dir, rp.run_id(args.model, args.dataset, ref_exp, args.template, args.component)
                     + f"__{ref_metric}.json")
                 refs[metric] = path
                 if not os.path.exists(path):
@@ -905,7 +927,7 @@ def main():
         elif name in rp.RANDOM_REFERENCE:
             ref_exp, ref_metric = rp.RANDOM_REFERENCE[name].split("__")
             ref_path = os.path.join(
-                args.out_dir, rp.run_id(args.model, args.dataset, ref_exp, args.template)
+                args.out_dir, rp.run_id(args.model, args.dataset, ref_exp, args.template, args.component)
                 + f"__{ref_metric}.json")
             if not os.path.exists(ref_path):
                 print(f"\nSkipping {name}: reference run missing ({os.path.basename(ref_path)}). "

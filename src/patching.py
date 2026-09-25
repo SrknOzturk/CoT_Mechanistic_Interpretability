@@ -12,6 +12,93 @@ from transformer_lens import HookedTransformer
 from src.utils import logits_from_final_residual
 
 
+def _capture_resid_pre(model: HookedTransformer, corrupted_tokens: torch.Tensor) -> dict:
+    """
+    The residual entering every block, from one unpatched run.
+
+    Patching a component of layer L leaves blocks 0..L-1 untouched, so their
+    output is the same for every unit of every layer in a sweep. Each sweep
+    pass can therefore resume from resid_pre[L] and run n_layers-L blocks
+    instead of all n_layers, which halves the sweep's work on average.
+
+    Safe because the sweeps are batch-1 and unpadded (patching_pipeline's
+    `padding` is off, and nothing enables it), so there is no attention mask
+    to reconstruct from tokens that are no longer passed.
+    """
+    n_layers = model.cfg.n_layers
+    resid_pre = {}
+
+    def make_capture(idx):
+        def capture(value, hook):
+            resid_pre[idx] = value.clone()
+            return value
+        return capture
+
+    with torch.no_grad():
+        model.run_with_hooks(
+            corrupted_tokens,
+            fwd_hooks=[(f"blocks.{idx}.hook_resid_pre", make_capture(idx))
+                       for idx in range(n_layers)],
+            return_type=None,
+            stop_at_layer=n_layers,
+        )
+    return resid_pre
+
+
+def patch_mlp_out_last_pos(
+    model: HookedTransformer,
+    corrupted_tokens: torch.Tensor,
+    clean_cache,
+    metric_fn: Callable,
+    normalize: bool = False
+) -> torch.Tensor:
+    """
+    The MLP counterpart of patch_attn_head_out_last_pos: patches one layer's
+    whole MLP output (hook_mlp_out) at the last position per forward pass.
+
+    Returns [n_layers, 1] (or a dict of them), one unit per layer with head
+    index 0, so the head-selection, joint-patching and record code downstream
+    runs unchanged.
+    """
+    corrupted_last_pos = corrupted_tokens.shape[1] - 1
+    clean_last_pos = clean_cache["mlp_out", 0].shape[1] - 1
+    n_layers = model.cfg.n_layers
+
+    single = not isinstance(metric_fn, dict)
+    metric_fns = {"_": metric_fn} if single else metric_fn
+    scores = {name: torch.zeros(n_layers, 1, device=corrupted_tokens.device)
+              for name in metric_fns}
+
+    resid_pre = _capture_resid_pre(model, corrupted_tokens)
+
+    for layer in range(n_layers):
+        clean_value = clean_cache["mlp_out", layer][:, clean_last_pos, :]
+
+        def hook_fn(value, hook, clean_value=clean_value):
+            value = value.clone()
+            value[:, corrupted_last_pos, :] = clean_value
+            return value
+
+        with torch.no_grad():
+            residual = model.run_with_hooks(
+                resid_pre[layer],
+                fwd_hooks=[(f"blocks.{layer}.hook_mlp_out", hook_fn)],
+                return_type=None,
+                start_at_layer=layer,
+                stop_at_layer=n_layers,
+            )
+            logits = logits_from_final_residual(model, residual)
+            del residual
+
+        if normalize:
+            logits = (logits - logits.mean()) / logits.std()
+        for name, fn in metric_fns.items():
+            scores[name][layer, 0] = fn(logits)
+        del logits
+
+    return scores["_"] if single else scores
+
+
 def patch_attn_head_out_last_pos(
     model: HookedTransformer,
     corrupted_tokens: torch.Tensor,
@@ -62,31 +149,7 @@ def patch_attn_head_out_last_pos(
     # Choose the correct hook name for the attention head OUTPUT ("z") in TransformerLens.
     hook_name_template = "blocks.{layer}.attn.hook_z"
 
-    # Patching hook_z at layer L leaves blocks 0..L-1 untouched, so their output
-    # is the same for every head of every layer in the sweep. Capture the
-    # residual entering each block once from the unpatched run, and let each
-    # sweep pass resume from there: a pass then runs n_layers-L blocks instead
-    # of all n_layers, which halves the sweep's work on average.
-    #
-    # Safe because this sweep is batch-1 and unpadded (patching_pipeline's
-    # `padding` is off, and nothing enables it), so there is no attention mask
-    # to reconstruct from tokens we are no longer passing.
-    resid_pre = {}
-
-    def make_capture(idx):
-        def capture(value, hook):
-            resid_pre[idx] = value.clone()
-            return value
-        return capture
-
-    with torch.no_grad():
-        model.run_with_hooks(
-            corrupted_tokens,
-            fwd_hooks=[(f"blocks.{idx}.hook_resid_pre", make_capture(idx))
-                       for idx in range(n_layers)],
-            return_type=None,
-            stop_at_layer=n_layers,
-        )
+    resid_pre = _capture_resid_pre(model, corrupted_tokens)
 
     # Sweep over all layers and heads, patching one head at a time
     for layer in range(n_layers):

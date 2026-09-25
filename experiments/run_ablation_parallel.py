@@ -72,6 +72,13 @@ def main():
     ap.add_argument("--worker-cap", type=int, default=8,
                     help="upper bound on auto-sized worker count (compute saturates before VRAM does)")
 
+    ap.add_argument("--data-file", default=None,
+                    help="candidate file under data/processed to draw examples from instead "
+                         "of the dataset's own (e.g. a held-out pilot subset); it must carry "
+                         "the same columns")
+    ap.add_argument("--component", choices=rp.COMPONENTS, default="head",
+                    help="ablate the attention heads (default) or the MLP layers a "
+                         "--component mlp patching run selected")
     ap.add_argument("--equation-ablation", action="store_true",
                     help="also run the Direct-Equation ablation condition (SVAMP only: it "
                          "needs the Equation column)")
@@ -94,7 +101,8 @@ def main():
     task = get_task(args.dataset)
     template = get_template(args.template)
 
-    data_path = os.path.join(REPO_ROOT, "data", "processed", rp.DATASETS[args.dataset])
+    data_path = os.path.join(REPO_ROOT, "data", "processed",
+                             args.data_file or rp.DATASETS[args.dataset])
     if not os.path.exists(data_path):
         print(f"[ERROR] dataset not found: {data_path}")
         sys.exit(1)
@@ -109,7 +117,7 @@ def main():
         metrics = ["jsd"]
     else:
         metrics = ["margin", "jsd"] if args.metric == "both" else [args.metric]
-    base = rp.run_id(args.model, args.dataset, args.experiment, args.template)
+    base = rp.run_id(args.model, args.dataset, args.experiment, args.template, args.component)
     multi_output = args.experiment in rp.MULTI_OUTPUT
 
     summary = []

@@ -100,6 +100,7 @@ def _generate_with_ablation(
     print_tokens=False,
     task=None,
     decoding=None,
+    component="head",
 ):
     """
     Greedy generation with the given heads zeroed for the whole trajectory.
@@ -125,7 +126,7 @@ def _generate_with_ablation(
 
     input_tokens = model.to_tokens(prompt, prepend_bos=prepend_bos).to(device)
     output_tokens = input_tokens.clone()
-    hooks = make_zero_ablation_hooks(ablated_heads) if ablated_heads else []
+    hooks = make_zero_ablation_hooks(ablated_heads, component) if ablated_heads else []
 
     def _loop():
         nonlocal output_tokens
@@ -205,18 +206,19 @@ def _generate_with_ablation(
 
 def generate_with_optional_ablation(
     model, prompt, ablated_heads=None, max_new_tokens=1024, print_tokens=False, task=None,
-    decoding=None,
+    decoding=None, component="head",
 ):
     """No-CoT condition: the prompt already ends at the answer trigger."""
     return _generate_with_ablation(
         model, prompt, ablated_heads=ablated_heads, max_new_tokens=max_new_tokens,
-        print_tokens=print_tokens, task=task, decoding=decoding,
+        print_tokens=print_tokens, task=task, decoding=decoding, component=component,
     )
 
 
 def generate_cot_with_optional_ablation(
     model, prompt, ablated_heads=None, max_cot_reasoning_tokens=1024,
     max_answer_tokens=None, print_tokens=False, task=None, decoding=None,
+    component="head",
 ):
     """
     CoT condition: the model reasons first, then answers. max_answer_tokens is
@@ -225,7 +227,7 @@ def generate_cot_with_optional_ablation(
     """
     return _generate_with_ablation(
         model, prompt, ablated_heads=ablated_heads, max_new_tokens=max_cot_reasoning_tokens,
-        print_tokens=print_tokens, task=task, decoding=decoding,
+        print_tokens=print_tokens, task=task, decoding=decoding, component=component,
     )
 
 
@@ -247,6 +249,7 @@ def run_nocot_ablation_using_curated_heads(
     template=None,
     checkpoint_path=None,
     decoding=None,
+    component="head",
 ):
     """
     Her sampled_df örneği için:
@@ -308,6 +311,7 @@ def run_nocot_ablation_using_curated_heads(
             print_tokens=print_tokens,
             task=task,
             decoding=decoding,
+            component=component,
         )
 
         normal_extracted = task.extract(normal_text)
@@ -337,6 +341,7 @@ def run_nocot_ablation_using_curated_heads(
                 print_tokens=print_tokens,
                 task=task,
                 decoding=decoding,
+                component=component,
             )
 
             ablation_extracted = task.extract(ablation_text)
@@ -356,7 +361,8 @@ def run_nocot_ablation_using_curated_heads(
             random_heads_list = sample_random_heads_same_count_for_example(
                 model,
                 num_heads,
-                seed=random_seed + count
+                seed=random_seed + count,
+                component=component,
             )
 
             random_text = generate_with_optional_ablation(
@@ -367,6 +373,7 @@ def run_nocot_ablation_using_curated_heads(
                 print_tokens=print_tokens,
                 task=task,
                 decoding=decoding,
+                component=component,
             )
 
             random_extracted = task.extract(random_text)
@@ -437,6 +444,7 @@ def run_direct_equation_ablation_using_curated_heads(
     template=None,
     checkpoint_path=None,
     decoding=None,
+    component="head",
 ):
     """
     Direct-Equation condition: the prompt is the arithmetic alone, e.g.
@@ -513,6 +521,7 @@ def run_direct_equation_ablation_using_curated_heads(
                 print_tokens=print_tokens,
                 task=task,
                 decoding=decoding,
+                component=component,
             )
 
             normal_extracted = task.extract(normal_text)
@@ -534,6 +543,7 @@ def run_direct_equation_ablation_using_curated_heads(
                     print_tokens=print_tokens,
                     task=task,
                     decoding=decoding,
+                    component=component,
                 )
 
                 ablation_extracted = task.extract(ablation_text)
@@ -545,7 +555,8 @@ def run_direct_equation_ablation_using_curated_heads(
                 random_heads_list = sample_random_heads_matched_layers_for_example(
                     model,
                     selected_heads_list,
-                    seed=random_seed + count
+                    seed=random_seed + count,
+                    component=component,
                 )
 
                 random_text = generate_with_optional_ablation(
@@ -556,6 +567,7 @@ def run_direct_equation_ablation_using_curated_heads(
                     print_tokens=print_tokens,
                     task=task,
                     decoding=decoding,
+                    component=component,
                 )
 
                 random_extracted = task.extract(random_text)
@@ -623,6 +635,7 @@ def run_cot_ablation_using_curated_heads(
     template=None,
     checkpoint_path=None,
     decoding=None,
+    component="head",
 ):
     """
     Her sampled_df örneği için:
@@ -685,6 +698,7 @@ def run_cot_ablation_using_curated_heads(
             print_tokens=print_tokens,
             task=task,
             decoding=decoding,
+            component=component,
         )
 
         # If the unablated run never reached the trigger there is no baseline to
@@ -715,6 +729,7 @@ def run_cot_ablation_using_curated_heads(
                 print_tokens=print_tokens,
                 task=task,
                 decoding=decoding,
+                component=component,
             )
 
             ablation_answer_anchor_reached = _answer_trigger_reached(task, ablation_text)
@@ -738,7 +753,8 @@ def run_cot_ablation_using_curated_heads(
             random_heads_list = sample_random_heads_same_count_for_example(
                 model,
                 num_heads,
-                seed=random_seed + count
+                seed=random_seed + count,
+                component=component,
             )
 
             random_text = generate_cot_with_optional_ablation(
@@ -750,6 +766,7 @@ def run_cot_ablation_using_curated_heads(
                 print_tokens=print_tokens,
                 task=task,
                 decoding=decoding,
+                component=component,
             )
 
             random_answer_anchor_reached = _answer_trigger_reached(task, random_text)
