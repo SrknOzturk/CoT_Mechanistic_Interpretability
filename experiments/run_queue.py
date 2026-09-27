@@ -9,10 +9,11 @@ job also resumes internally from its own per-example checkpoints).
 
 Presets:
   mlp-k-pilot  Qwen2.5-0.5B on a held-out SVAMP subset, MLP component, normal
-               patching + ablation for each k in --ks. Each k writes to its own
-               directory so no k can reuse another's checkpoints.
+               patching for each k in --ks, followed by ablation unless
+               --no-ablation is set. Each k has its own checkpoint directory.
   mlp-full     every model x dataset with the MLP component at one --k:
-               normal + random patching, each followed by its ablation.
+               normal + random patching, each followed by ablation unless
+               --no-ablation is set.
 
 Usage:
   python experiments/run_queue.py mlp-k-pilot
@@ -42,16 +43,18 @@ WORKERS = {"qwen2.5-0.5b": 6, "olmo2-1b": 3, "llama3.2-1b": 3}
 def pilot_jobs(args):
     jobs = []
     for k in args.ks:
-        jobs.append((f"pilot_qwen_svamp_mlp_pos{args.heads_per_pos}_k{k}", [
+        cmd = [
             "--model", "qwen2.5-0.5b", "--dataset", "svamp",
             "--data-file", args.pilot_file, "--target-n", str(args.pilot_n),
             "--component", "mlp", "--experiments", "normal",
             "--heads-per-pos", str(args.heads_per_pos),
-            "--global-top-k", str(k), "--equation-ablation",
+            "--global-top-k", str(k),
             "--out-dir", os.path.join("results", "pilot_mlp_global_k",
                                       f"pos{args.heads_per_pos}", f"k{k}"),
             "--workers", str(args.workers or WORKERS["qwen2.5-0.5b"]),
-        ]))
+        ]
+        cmd += ["--no-ablation"] if args.no_ablation else ["--equation-ablation"]
+        jobs.append((f"pilot_qwen_svamp_mlp_pos{args.heads_per_pos}_k{k}", cmd))
     return jobs
 
 
@@ -67,7 +70,9 @@ def full_jobs(args):
                    "--out-dir", os.path.join("results", "mlp_global_k",
                                              f"pos{args.heads_per_pos}", f"k{args.k}"),
                    "--workers", str(args.workers or WORKERS[model])]
-            if dataset == "svamp":
+            if args.no_ablation:
+                cmd.append("--no-ablation")
+            elif dataset == "svamp":
                 cmd.append("--equation-ablation")
             jobs.append((f"{model}__{dataset}__mlp_pos{args.heads_per_pos}_global_k{args.k}", cmd))
     return jobs
@@ -110,6 +115,8 @@ def main():
                     help="extra attempts for a failed job before moving on (default 1)")
     ap.add_argument("--rerun", action="store_true",
                     help="run jobs the status file already marks as done")
+    ap.add_argument("--no-ablation", action="store_true",
+                    help="run patching only; skip ablation for every queued job")
     ap.add_argument("--dry-run", action="store_true", help="print the queue and exit")
     args = ap.parse_args()
     if args.heads_per_pos < 1 or (args.k is not None and args.k < 1) or any(k < 1 for k in args.ks):
@@ -118,6 +125,8 @@ def main():
     jobs = pilot_jobs(args) if args.preset == "mlp-k-pilot" else full_jobs(args)
     tag = f"{args.preset}_global_pos{args.heads_per_pos}" if args.preset == "mlp-k-pilot" \
         else f"{args.preset}_global_k{args.k}_pos{args.heads_per_pos}"
+    if args.no_ablation:
+        tag += "_patch_only"
     os.makedirs(os.path.join(QUEUE_DIR, "logs"), exist_ok=True)
     status_path = os.path.join(QUEUE_DIR, f"{tag}.json")
     status = json.load(open(status_path)) if os.path.exists(status_path) else {}

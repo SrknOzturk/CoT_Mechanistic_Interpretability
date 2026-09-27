@@ -176,6 +176,15 @@ python experiments/summarize_mlp_k_pilot.py
 python experiments/run_queue.py mlp-full --k 3
 ```
 
+To sweep the global MLP budget using patching scores only, skip the ablation
+stage with `--no-ablation`. The pilot summary still reports patching scores;
+its ablation columns remain blank until ablation is run.
+
+```bash
+python experiments/run_queue.py mlp-k-pilot --heads-per-pos 3 --ks 1 2 3 4 5 --no-ablation
+python experiments/summarize_mlp_k_pilot.py
+```
+
 ### Running the full study
 
 Three models × two datasets. Each command is independently resumable:
