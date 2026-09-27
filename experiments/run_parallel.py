@@ -153,6 +153,8 @@ def _worker_main(cfg):
         if name in _rp.MULTI_OUTPUT:
             kwargs["output_paths"] = {m: None for m in _rp.MULTI_OUTPUT[name]}
             kwargs["heads_per_pos"] = cfg["heads_per_pos"]
+            if name == "normal":
+                kwargs["global_top_k"] = cfg["global_top_k"]
             if name in _rp.RANDOM_REFERENCE_MULTI:
                 # a dict of {"margin": path, "jsd": path}, unlike the plain
                 # string the legacy single-metric random controls take below
@@ -561,7 +563,8 @@ def _run_workers_until_processed(name, args, ids, id_column, data_path, ckpt_dir
                 repo_root=REPO_ROOT, experiments_dir=EXPERIMENTS_DIR,
                 model=args.model, device=args.device, dataset=args.dataset,
                 template=args.template, experiment=name, id_column=id_column,
-                ctx=args.ctx, heads_per_pos=args.heads_per_pos, max_steps=args.max_steps,
+                ctx=args.ctx, heads_per_pos=args.heads_per_pos,
+                global_top_k=args.global_top_k, max_steps=args.max_steps,
                 seed=args.seed, checkpoint_path=ckpt_path, shard_ids=shard_ids,
                 data_path=data_path, reference_json_path=ref_path,
                 component=args.component,
@@ -642,7 +645,8 @@ def run_experiment(name, args, primary_ids, reserve_ids, id_column, data_path,
     --target-n/--n against the same candidate file.
     """
     target_n = len(primary_ids)
-    base = rp.run_id(args.model, args.dataset, name, args.template, args.component)
+    base = rp.run_id(args.model, args.dataset, name, args.template,
+                     args.component, args.global_top_k)
     ckpt_dir = os.path.join(args.out_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
     pattern = os.path.join(ckpt_dir, f"{base}.attempt*.worker*.jsonl")
@@ -752,7 +756,8 @@ def _run_ablation_stage(args, task, template, experiment, result, id_column, dat
     ablation_out_dir = os.path.join(args.out_dir, "ablation")
     os.makedirs(ablation_out_dir, exist_ok=True)
 
-    base = rp.run_id(args.model, args.dataset, experiment, args.template, args.component)
+    base = rp.run_id(args.model, args.dataset, experiment, args.template,
+                     args.component, args.global_top_k)
     summary = []
     multi_output = experiment in rp.MULTI_OUTPUT
     for metric, records in outputs:
@@ -798,6 +803,9 @@ def main():
     ap.add_argument("--heads-per-pos", type=int, default=3,
                     help="units selected per POS category: attention heads, or MLP layers "
                          "with --component mlp (default: 3)")
+    ap.add_argument("--global-top-k", type=int, default=None,
+                    help="patch the best K distinct units across the per-POS selections "
+                         "(default: all selected units)")
     ap.add_argument("--data-file", default=None,
                     help="candidate file under data/processed to draw examples from instead "
                          "of the dataset's own (e.g. a held-out pilot subset); it must carry "
@@ -842,6 +850,11 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="print the sharding plan and exit without loading a model or spawning workers")
     args = ap.parse_args()
+    if args.global_top_k is not None and args.global_top_k < 1:
+        ap.error("--global-top-k must be positive")
+    if args.global_top_k is not None and any(
+            name not in rp.COMPONENT_EXPERIMENTS for name in args.experiments):
+        ap.error("--global-top-k supports only normal and random")
 
     unsupported = [e for e in args.experiments if e not in rp.COMPONENT_EXPERIMENTS]
     if args.component != "head" and unsupported:
@@ -913,7 +926,8 @@ def main():
             for metric, ref_spec in rp.RANDOM_REFERENCE_MULTI[name].items():
                 ref_exp, ref_metric = ref_spec.split("__")
                 path = os.path.join(
-                    args.out_dir, rp.run_id(args.model, args.dataset, ref_exp, args.template, args.component)
+                    args.out_dir, rp.run_id(args.model, args.dataset, ref_exp, args.template,
+                                            args.component, args.global_top_k)
                     + f"__{ref_metric}.json")
                 refs[metric] = path
                 if not os.path.exists(path):
@@ -927,7 +941,8 @@ def main():
         elif name in rp.RANDOM_REFERENCE:
             ref_exp, ref_metric = rp.RANDOM_REFERENCE[name].split("__")
             ref_path = os.path.join(
-                args.out_dir, rp.run_id(args.model, args.dataset, ref_exp, args.template, args.component)
+                args.out_dir, rp.run_id(args.model, args.dataset, ref_exp, args.template,
+                                        args.component, args.global_top_k)
                 + f"__{ref_metric}.json")
             if not os.path.exists(ref_path):
                 print(f"\nSkipping {name}: reference run missing ({os.path.basename(ref_path)}). "

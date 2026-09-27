@@ -137,34 +137,41 @@ Values are a starting point, not a tuned setting — check the skip count in the
 output and adjust. Whatever is used here must be repeated for `rescore_k_sweep.py`,
 which regenerates the clean trace and rejects it if it differs from the saved one.
 
-Other knobs: `--ctx`, `--heads-per-pos`, `--max-steps` (patching sweep depth),
+Other knobs: `--ctx`, `--heads-per-pos`, `--global-top-k`, `--max-steps` (patching sweep depth),
 `--ablation-max-new-tokens` (generation budget), `--seed`, `--fresh`, `--dry-run`.
+`--global-top-k` leaves POS candidate selection intact and patches at most K
+distinct units in the final joint patch; omit it to keep the previous behavior.
+It applies to both attention heads and MLP layers. Capped runs have `__topkK`
+in their result and checkpoint names.
 To re-run only ablation against a completed patching run, use
 `run_ablation_parallel.py`, which takes the same flags.
 
 **MLP layers instead of attention heads.** `--component mlp` runs the same
 pipeline on each layer's whole MLP output (`hook_mlp_out`): sequential
 patching, POS-guided selection of `--heads-per-pos` layers per category,
-random-activation control, and zero-ablation against an equally sized random
+then (when set) the best `--global-top-k` distinct layers across those
+categories by patching score (higher margin or lower JSD). It also runs a
+random-activation control and zero-ablation against an equally sized random
 set of layers. Results are written under a `__mlp__` tag, so they never
 overwrite the head results. Only the `normal` and `random` experiments support
-it, and `run_ablation_parallel.py` needs the same flag to find the MLP files:
+it, and `run_ablation_parallel.py` needs the same component and global-k flags
+to find the MLP files:
 
 ```bash
-python experiments/run_parallel.py --model qwen2.5-0.5b --dataset svamp --target-n 64 --component mlp --equation-ablation
+python experiments/run_parallel.py --model qwen2.5-0.5b --dataset svamp --target-n 64 --component mlp --heads-per-pos 3 --global-top-k 3 --equation-ablation
 ```
 
 **Running a whole study from one command.** `experiments/run_queue.py` runs a
 queue of `run_parallel.py` jobs back to back. A failing job is retried once
 and then skipped rather than stopping the queue; statuses go to
 `results/queue/`, and re-running the same command resumes. `mlp-k-pilot`
-chooses k for the MLP component on a held-out SVAMP subset
+chooses the global k for the MLP component on a held-out SVAMP subset
 (`experiments/make_heldout_subset.py`, compared with
 `experiments/summarize_mlp_k_pilot.py`); `mlp-full --k K` then covers every
 model and dataset:
 
 ```bash
-python experiments/run_queue.py mlp-k-pilot
+python experiments/run_queue.py mlp-k-pilot --heads-per-pos 3
 python experiments/summarize_mlp_k_pilot.py
 python experiments/run_queue.py mlp-full --k 3
 ```

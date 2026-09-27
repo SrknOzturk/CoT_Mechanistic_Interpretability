@@ -1,7 +1,7 @@
 """
 Compares the k values of the MLP k-pilot side by side (run_queue.py mlp-k-pilot).
 
-For each k: how many MLP layers the POS-guided selection picks per example,
+For each global k: how many MLP layers the POS-guided selection picks per example,
 which layers recur, the joint-patch score, and zero-ablation accuracy with the
 selected layers versus an equally sized random set of layers (exact McNemar on
 the paired examples).
@@ -56,7 +56,8 @@ def mcnemar(a, b):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--root", default=os.path.join(REPO_ROOT, "results", "pilot_mlp_k"))
+    ap.add_argument("--root", default=os.path.join(REPO_ROOT, "results",
+                                                    "pilot_mlp_global_k", "pos3"))
     ap.add_argument("--stem", default="qwen2.5-0.5b__svamp__step_by_step__mlp__normal")
     args = ap.parse_args()
 
@@ -71,7 +72,7 @@ def main():
         freq_lines = []
         for k in ks:
             out = os.path.join(args.root, f"k{k}")
-            pj = os.path.join(out, f"{args.stem}__{metric}.json")
+            pj = os.path.join(out, f"{args.stem}__topk{k}__{metric}.json")
             if not os.path.exists(pj):
                 print(f"{k:>2} | missing {os.path.basename(pj)}")
                 continue
@@ -82,7 +83,7 @@ def main():
             score = np.mean([r["metrics"][score_key] for r in recs])
             cells = []
             for cond in CONDITIONS:
-                csv = os.path.join(out, "ablation", f"{args.stem}__{metric}__ablation_{cond}.csv")
+                csv = os.path.join(out, "ablation", f"{args.stem}__topk{k}__{metric}__ablation_{cond}.csv")
                 if not os.path.exists(csv):
                     cells.append(f"{'-':^27}")
                     continue

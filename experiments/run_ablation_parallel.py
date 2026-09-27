@@ -79,6 +79,8 @@ def main():
     ap.add_argument("--component", choices=rp.COMPONENTS, default="head",
                     help="ablate the attention heads (default) or the MLP layers a "
                          "--component mlp patching run selected")
+    ap.add_argument("--global-top-k", type=int, default=None,
+                    help="find a patching run limited to K selected units")
     ap.add_argument("--equation-ablation", action="store_true",
                     help="also run the Direct-Equation ablation condition (SVAMP only: it "
                          "needs the Equation column)")
@@ -94,6 +96,8 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="print the sharding plan and exit without loading a model or spawning workers")
     args = ap.parse_args()
+    if args.global_top_k is not None and args.global_top_k < 1:
+        ap.error("--global-top-k must be positive")
 
     out_dir = args.out_dir or os.path.join(args.results_dir, "ablation")
     os.makedirs(out_dir, exist_ok=True)
@@ -117,7 +121,8 @@ def main():
         metrics = ["jsd"]
     else:
         metrics = ["margin", "jsd"] if args.metric == "both" else [args.metric]
-    base = rp.run_id(args.model, args.dataset, args.experiment, args.template, args.component)
+    base = rp.run_id(args.model, args.dataset, args.experiment, args.template,
+                     args.component, args.global_top_k)
     multi_output = args.experiment in rp.MULTI_OUTPUT
 
     summary = []

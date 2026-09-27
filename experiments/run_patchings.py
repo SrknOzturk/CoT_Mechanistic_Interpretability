@@ -1517,6 +1517,17 @@ def _joint_patch_hooks(layer_to_specs, component="head"):
             for layer, specs in layer_to_specs.items()]
 
 
+def select_global_top_units(merged, global_top_k, largest):
+    """Limit distinct per-POS winners using their best single-unit patch score."""
+    if global_top_k is None:
+        return merged
+    if global_top_k < 1:
+        raise ValueError("global_top_k must be a positive integer")
+    return dict(sorted(
+        merged.items(), key=lambda pair: pair[1]["score"], reverse=largest,
+    )[:global_top_k])
+
+
 def multi_head_patching_dual_metric(
     df,
     model,
@@ -1532,6 +1543,7 @@ def multi_head_patching_dual_metric(
     checkpoint_path=None,
     decoding=None,
     component="head",
+    global_top_k=None,
 ):
     """
     One sequential scan of the CoT trace that scores margin and JSD together.
@@ -1549,6 +1561,8 @@ def multi_head_patching_dual_metric(
     analysis code needs no changes.
     """
     task = task or get_task()
+    if global_top_k is not None and global_top_k < 1:
+        raise ValueError("global_top_k must be a positive integer")
     template = template or get_template()
     device = next(model.parameters()).device
 
@@ -1691,6 +1705,10 @@ def multi_head_patching_dual_metric(
                     if key not in merged or better(info["score"], merged[key]["score"]):
                         merged[key] = {**info, "label": label}
 
+            # Keep the per-POS candidate selection, then cap the number of
+            # distinct units patched jointly across all POS categories.
+            merged = select_global_top_units(merged, global_top_k, cfg["largest"])
+
             category_level = {}
             for label, entries in banks[name].items():
                 stacked = torch.stack(pos_hms[name][label])
@@ -1832,10 +1850,11 @@ COMPONENTS = ("head", "mlp")
 COMPONENT_EXPERIMENTS = ("normal", "random")
 
 
-def run_id(model_name, dataset, experiment, template, component="head"):
+def run_id(model_name, dataset, experiment, template, component="head", global_top_k=None):
     # head runs keep their original names so existing results stay addressable
     tag = template if component == "head" else f"{template}__{component}"
-    return f"{model_name}__{dataset}__{tag}__{experiment}"
+    suffix = f"__topk{global_top_k}" if global_top_k is not None else ""
+    return f"{model_name}__{dataset}__{tag}__{experiment}{suffix}"
 
 
 def main():
@@ -1852,10 +1871,21 @@ def main():
     ap.add_argument("--n", type=int, default=None, help="limit to the first N examples")
     ap.add_argument("--ctx", type=int, default=2048)
     ap.add_argument("--heads-per-pos", type=int, default=3)
+    ap.add_argument("--global-top-k", type=int, default=None,
+                    help="patch only the best K distinct units among the per-POS selections")
+    ap.add_argument("--component", choices=COMPONENTS, default="head")
     ap.add_argument("--max-steps", type=int, default=1024)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out-dir", default=RESULTS_DIR)
     args = ap.parse_args()
+    if args.global_top_k is not None and args.global_top_k < 1:
+        ap.error("--global-top-k must be positive")
+    if args.component != "head" and any(
+            name not in COMPONENT_EXPERIMENTS for name in args.experiments):
+        ap.error("--component mlp supports only normal and random")
+    if args.global_top_k is not None and any(
+            name not in COMPONENT_EXPERIMENTS for name in args.experiments):
+        ap.error("--global-top-k supports only normal and random")
 
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -1885,7 +1915,8 @@ def main():
     model = load_model(args.model, device=args.device)
 
     for name in args.experiments:
-        base = run_id(args.model, args.dataset, name, args.template)
+        base = run_id(args.model, args.dataset, name, args.template,
+                      args.component, args.global_top_k)
         out_path = os.path.join(args.out_dir, base + ".json")
         kwargs = dict(
             df=sampled_df,
@@ -1904,6 +1935,9 @@ def main():
                 m: os.path.join(args.out_dir, f"{base}__{m}.json") for m in MULTI_OUTPUT[name]
             }
             kwargs["heads_per_pos"] = args.heads_per_pos
+            if name == "normal":
+                kwargs["global_top_k"] = args.global_top_k
+            kwargs["component"] = args.component
 
             if name in RANDOM_REFERENCE_MULTI:
                 refs = {}
@@ -1911,7 +1945,8 @@ def main():
                     ref_exp, ref_metric = ref_spec.split("__")
                     refs[metric] = os.path.join(
                         args.out_dir,
-                        run_id(args.model, args.dataset, ref_exp, args.template) + f"__{ref_metric}.json")
+                        run_id(args.model, args.dataset, ref_exp, args.template,
+                               args.component, args.global_top_k) + f"__{ref_metric}.json")
                 missing_refs = [p for p in refs.values() if not os.path.exists(p)]
                 if missing_refs:
                     print(f"Skipping {name}: reference run(s) missing "
@@ -1931,7 +1966,8 @@ def main():
             ref_exp, ref_metric = RANDOM_REFERENCE[name].split("__")
             ref = os.path.join(
                 args.out_dir,
-                run_id(args.model, args.dataset, ref_exp, args.template) + f"__{ref_metric}.json")
+                run_id(args.model, args.dataset, ref_exp, args.template,
+                       args.component, args.global_top_k) + f"__{ref_metric}.json")
             if not os.path.exists(ref):
                 print(f"Skipping {name}: reference run missing ({os.path.basename(ref)}). "
                       f"Run the '{ref_exp}' experiment first.")

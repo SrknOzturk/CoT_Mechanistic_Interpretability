@@ -42,12 +42,14 @@ WORKERS = {"qwen2.5-0.5b": 6, "olmo2-1b": 3, "llama3.2-1b": 3}
 def pilot_jobs(args):
     jobs = []
     for k in args.ks:
-        jobs.append((f"pilot_qwen_svamp_mlp_k{k}", [
+        jobs.append((f"pilot_qwen_svamp_mlp_pos{args.heads_per_pos}_k{k}", [
             "--model", "qwen2.5-0.5b", "--dataset", "svamp",
             "--data-file", args.pilot_file, "--target-n", str(args.pilot_n),
             "--component", "mlp", "--experiments", "normal",
-            "--heads-per-pos", str(k), "--equation-ablation",
-            "--out-dir", os.path.join("results", "pilot_mlp_k", f"k{k}"),
+            "--heads-per-pos", str(args.heads_per_pos),
+            "--global-top-k", str(k), "--equation-ablation",
+            "--out-dir", os.path.join("results", "pilot_mlp_global_k",
+                                      f"pos{args.heads_per_pos}", f"k{k}"),
             "--workers", str(args.workers or WORKERS["qwen2.5-0.5b"]),
         ]))
     return jobs
@@ -60,11 +62,14 @@ def full_jobs(args):
     for model in args.models:
         for dataset in args.datasets:
             cmd = ["--model", model, "--dataset", dataset, "--component", "mlp",
-                   "--heads-per-pos", str(args.k),
+                   "--heads-per-pos", str(args.heads_per_pos),
+                   "--global-top-k", str(args.k),
+                   "--out-dir", os.path.join("results", "mlp_global_k",
+                                             f"pos{args.heads_per_pos}", f"k{args.k}"),
                    "--workers", str(args.workers or WORKERS[model])]
             if dataset == "svamp":
                 cmd.append("--equation-ablation")
-            jobs.append((f"{model}__{dataset}__mlp_k{args.k}", cmd))
+            jobs.append((f"{model}__{dataset}__mlp_pos{args.heads_per_pos}_global_k{args.k}", cmd))
     return jobs
 
 
@@ -90,9 +95,11 @@ def run_job(name, cmd_args, log_path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("preset", choices=["mlp-k-pilot", "mlp-full"])
-    ap.add_argument("--k", type=int, default=None, help="units per POS for mlp-full")
+    ap.add_argument("--k", type=int, default=None, help="total selected MLP layers for mlp-full")
     ap.add_argument("--ks", type=int, nargs="+", default=[1, 2, 3, 4, 5],
-                    help="k values for mlp-k-pilot (default 1 2 3 4 5)")
+                    help="total layer budgets for mlp-k-pilot (default 1 2 3 4 5)")
+    ap.add_argument("--heads-per-pos", type=int, default=3,
+                    help="candidate MLP layers per POS category before the global limit")
     ap.add_argument("--pilot-file", default="svamp_pilot_heldout.json")
     ap.add_argument("--pilot-n", type=int, default=16)
     ap.add_argument("--models", nargs="+", default=MODELS, choices=MODELS)
@@ -105,9 +112,12 @@ def main():
                     help="run jobs the status file already marks as done")
     ap.add_argument("--dry-run", action="store_true", help="print the queue and exit")
     args = ap.parse_args()
+    if args.heads_per_pos < 1 or (args.k is not None and args.k < 1) or any(k < 1 for k in args.ks):
+        ap.error("--heads-per-pos, --k and --ks must be positive")
 
     jobs = pilot_jobs(args) if args.preset == "mlp-k-pilot" else full_jobs(args)
-    tag = args.preset if args.preset == "mlp-k-pilot" else f"{args.preset}_k{args.k}"
+    tag = f"{args.preset}_global_pos{args.heads_per_pos}" if args.preset == "mlp-k-pilot" \
+        else f"{args.preset}_global_k{args.k}_pos{args.heads_per_pos}"
     os.makedirs(os.path.join(QUEUE_DIR, "logs"), exist_ok=True)
     status_path = os.path.join(QUEUE_DIR, f"{tag}.json")
     status = json.load(open(status_path)) if os.path.exists(status_path) else {}
