@@ -318,6 +318,123 @@ python experiments/report_statistics.py --results-dir results --n-boot 10000 --s
 
 The current `run_parallel.py` pipeline writes files such as `<model>__<dataset>__<template>__normal__jsd.json`; these are not automatically renamed to the legacy filenames. Therefore, do not assume the legacy report script analyzes current-run outputs unless the expected legacy files are present.
 
+## Additional paper experiments
+
+The following commands document the runnable code for the additional experiments discussed in the manuscript. They use the current script names and CLI arguments.
+
+### Direct-Equation ablation (SVAMP only)
+
+Direct-Equation is an **ablation condition**, not a separate head-localization method. It evaluates selected heads under the equation-based prompt condition. The processed SVAMP data must contain the `Equation` column.
+
+To run normal and Random Activation Patching and include the Direct-Equation condition in the automatic ablation stage:
+
+```bash
+python experiments/run_parallel.py \
+  --model qwen2.5-0.5b \
+  --dataset svamp \
+  --template step_by_step \
+  --target-n 64 \
+  --experiments normal random \
+  --equation-ablation \
+  --workers 1
+```
+
+If patching results already exist and you only need to run ablation again:
+
+```bash
+python experiments/run_ablation_parallel.py \
+  --model qwen2.5-0.5b --dataset svamp \
+  --template step_by_step --experiment normal --metric both \
+  --equation-ablation --workers 1
+```
+
+Use `--experiment random` to ablate the heads selected by Random Activation Patching instead. Direct-Equation is supported for SVAMP only.
+
+### Plan-and-Solve+ prompt condition (SVAMP)
+
+To run the patching workflow with the Plan-and-Solve+ CoT prompt, use `--template plan_solve_plus`:
+
+```bash
+python experiments/run_parallel.py \
+  --model qwen2.5-0.5b \
+  --dataset svamp \
+  --template plan_solve_plus \
+  --target-n 64 \
+  --experiments normal random \
+  --workers 1
+```
+
+This runs the standard and random-activation patching experiments and the default CoT/No-CoT ablation stage. Results are saved separately from the `step_by_step` runs.
+
+### Cross-example activation patching (fixed configuration)
+
+In cross-example patching, a donor question's CoT activations are patched into a different target question's No-CoT execution. The current script is fixed to Qwen2.5-0.5B, SVAMP, the `step_by_step` template, 32 target questions, and `k=3` heads per POS category. It evaluates MRR and JSD, then runs CoT/No-CoT ablations for the cross-selected heads.
+
+Validate the donor–target pairs without loading the model:
+
+```bash
+python experiments/run_cross_svamp_qwen.py --plan-only
+```
+
+Run the complete experiment on a CUDA device:
+
+```bash
+python experiments/run_cross_svamp_qwen.py --device cuda
+```
+
+Outputs and checkpoints are written to `results/cross/` by default. This script does not expose general model/dataset arguments; its configuration constants are defined near the top of `experiments/run_cross_svamp_qwen.py`.
+
+### k-sensitivity analysis
+
+The k-sweep reuses saved token-level results to evaluate selection budgets from 1 to 30 without repeating the full localization sweep. First run the preparation stage:
+
+```bash
+python experiments/run_k_pipeline.py prepare \
+  --model olmo2-1b --dataset svamp \
+  --workers 1 --gpu-total-gb 48
+```
+
+Inspect the results under `results/k_sweep/`, then run the completion stage with the chosen MRR and JSD budgets. The values below are examples and should be replaced with those chosen from your sweep:
+
+```bash
+python experiments/run_k_pipeline.py complete \
+  --model olmo2-1b --dataset svamp \
+  --margin-k 6 --jsd-k 15 \
+  --workers 1 --gpu-total-gb 48
+```
+
+The completion stage creates the matching Random Activation Patching controls and runs ablation for the selected head sets.
+
+### MLP-level interventions
+
+The repository also supports an exploratory MLP-level variant, where an MLP output at a layer is treated as the intervention unit instead of an attention head. Run the held-out SVAMP pilot over several global layer budgets:
+
+```bash
+python experiments/run_queue.py mlp-k-pilot --ks 1 2 3 4 5 --workers 1
+python experiments/summarize_mlp_k_pilot.py
+```
+
+After choosing a budget, run the full MLP experiments. Replace `3` with the budget selected from the pilot:
+
+```bash
+python experiments/run_queue.py mlp-full --k 3 \
+  --models qwen2.5-0.5b olmo2-1b llama3.2-1b \
+  --datasets svamp bigbench_boolean_expressions bigbench_web_of_lies \
+  --workers 1
+```
+
+MLP results are saved separately from attention-head results and should not be combined with the main head-based results.
+
+### Statistical reporting script
+
+The repository includes `experiments/report_statistics.py` for bootstrap confidence intervals, paired comparisons, and related analyses of the **legacy result-file layout**. It expects `multi_head_patching_with_jsd_results.json`, `multi_head_cross_patching_with_jsd_results.json`, and `random_patching_jsd_results.json` under the supplied results directory:
+
+```bash
+python experiments/report_statistics.py --results-dir results --n-boot 10000 --seed 42
+```
+
+The current `run_parallel.py` pipeline writes model/dataset/template-specific filenames (for example, `<model>__<dataset>__<template>__normal__jsd.json`). These are not automatically renamed to the legacy filenames, so the report script will only analyze the intended data if those expected files exist.
+
 ## Reproducibility notes
 
 - Use the same model, dataset, template, target count, generation budget, and decoding options when comparing standard and random-activation runs.
