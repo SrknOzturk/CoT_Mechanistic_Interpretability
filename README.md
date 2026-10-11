@@ -22,7 +22,7 @@ The main paper evaluates three base models and three reasoning tasks.
 |---|---|---|
 | \`qwen2.5-0.5b\` | Qwen2.5-0.5B | Base model |
 | \`olmo2-1b\` | OLMo-2-0425-1B | Base model |
-| \`llama3.2-1b\` | Llama-3.2-1B | Base model; gated Hugging Face access is required |
+| \`llama3.2-1b\` | Llama-3.2-1B | Base model |
 
 | Dataset key | Task |
 |---|---|
