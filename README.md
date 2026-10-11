@@ -1,244 +1,210 @@
-# Mechanistic Interpretability of Chain-of-Thought Reasoning in Math Word Problems
+# Mechanistic Interpretability of CoT via Sequential Activation Patching
 
-This repository contains the official implementation for the paper: **"Mechanistic Interpretability of Chain-of-Thought Reasoning in Math Word Problems: CoT as a Meta-Controller"**.
+This repository contains the implementation and experiment scripts for the paper **“Mechanistic Interpretability of CoT via Sequential Activation Patching.”** The project studies how activations produced during Chain-of-Thought (CoT) generation influence a model's final-answer computation.
 
-## 🚀 Overview
-In this work, we hypothesize that Chain-of-Thought (CoT) prompting acts as a **meta-controller** within the network, dynamically coordinating and activating specific problem-solving sub-circuits. We introduce **Sequential Multi-Head Patching**, a novel interpretability method that maps these functional circuits by analyzing activation flow across multiple tokens.
+## Overview
 
-Models, datasets and prompt templates are registry entries rather than code paths, so adding one does not mean adding a new pipeline:
+The method has three main stages:
 
-| Registry | Entries |
+1. **Sequential single-head localization.** For each generated CoT token position, patch each attention head's clean-run activation (\`hook_z\`) individually into the matched No-CoT execution at the final-answer position. Evaluate each intervention against the clean CoT reference.
+2. **POS-guided selection and joint patching.** Group token-level results by part-of-speech (POS) category. For each metric, select high-scoring heads within each category, deduplicate repeated layer–head pairs while retaining the strongest individual score and its associated source activation, and jointly patch the resulting set.
+3. **Zero ablation.** Zero the selected heads throughout generation under CoT and No-CoT prompts. Compare the resulting accuracy with the unablated baseline and an equally sized random-head control.
+
+A **Random Activation Patching** control replaces CoT-derived source activations with Gaussian random vectors while matching the number of jointly patched heads to the corresponding Sequential Activation Patching run.
+
+The two main metrics are **Jensen–Shannon divergence (JSD)** and **Margin Recovery Ratio (MRR)**. Lower JSD and higher MRR indicate stronger alignment with the clean CoT reference. In result filenames, the implementation uses \`margin\` for MRR.
+
+## Models and tasks
+
+The main paper evaluates three base models and three reasoning tasks.
+
+| Model key | Model | Notes |
+|---|---|---|
+| \`qwen2.5-0.5b\` | Qwen2.5-0.5B | Base model |
+| \`olmo2-1b\` | OLMo-2-0425-1B | Base model |
+| \`llama3.2-1b\` | Llama-3.2-1B | Base model; gated Hugging Face access is required |
+
+| Dataset key | Task |
 |---|---|
-| Models (`src/models.py`) | `qwen2.5-0.5b`, `olmo2-1b`, `llama3.2-1b` (all base, all float32) |
-| Datasets (`src/tasks.py`) | `svamp` (numeric), `prontoqa` (True/False), `bigbench_boolean_expressions` (balanced lengths 4/5/6) |
-| Templates (`src/templates.py`) | `step_by_step` (default), `qa1shot`, `plan_solve_plus` (SVAMP only) |
+| \`svamp\` | Arithmetic word problems |
+| \`bigbench_boolean_expressions\` | BIG-bench Boolean Expressions |
+| \`bigbench_web_of_lies\` | BIG-bench Web of Lies |
 
-## 📂 Repository Structure
-```text
+The code also retains support for \`prontoqa\`, an additional synthetic deduction task, but it is not one of the three tasks in the main paper's evaluation.
+
+The default prompt template is \`step_by_step\`, which uses a one-shot demonstration and an explicit CoT cue on the clean side. The alternative \`plan_solve_plus\` template is intended for SVAMP experiments; \`qa1shot\` is retained for reproduction checks.
+
+## Repository structure
+
+\`\`\`text
 .
-├── data/                       # raw, curated and candidate datasets
-├── experiments/                # runnable entry points (see Workflow below)
-│   ├── run_parallel.py         # main driver: patching + ablation, process-parallel
-│   ├── run_ablation_parallel.py# ablation only, for an already-completed patching run
-│   ├── run_k_pipeline.py       # resume-safe normal -> k-sweep -> chosen-k workflow
-│   ├── rescore_k_sweep.py      # re-score saved heatmaps at other k values
-│   ├── run_patchings.py        # the experiment functions themselves (also a CLI)
-│   └── run_ablations.py        # sequential ablation (superseded by the parallel path)
-├── results/                    # JSON/CSV outputs from experiment runs
-├── src/                        # Core implementation logic:
-│   ├── ablation.py             # zero-ablation hooks, No-CoT/CoT/Direct-Equation runners
-│   ├── analysis.py             # offline stats: bootstrap CIs, paired tests (CPU only)
-│   ├── data_loader.py          # dataset handling and pre-processing
-│   ├── gpu_planning.py         # worker-count sizing from available VRAM
-│   ├── metrics.py              # JSD and Margin Recovery Ratio factories
-│   ├── models.py               # model registry
-│   ├── patching.py             # activation patching primitives
-│   ├── patching_pipelines.py   # orchestration of a single layer x head sweep
-│   ├── tasks.py                # per-dataset answer parsing/comparison
-│   ├── templates.py            # prompt layout; owns the CoT/No-CoT pair
-│   ├── utils.py                # generation, decoding penalties, NER/POS helpers
-│   └── visualization.py        # heatmap plotting
-├── prepare_dataset.py          # builds data/processed/*_candidates.json
-├── requirements.txt            # Project dependencies
-└── README.md
+├── data/
+│   ├── raw/                    # Source datasets
+│   └── processed/              # Curated examples and candidate pools
+├── experiments/
+│   ├── run_parallel.py         # Main patching + optional automatic ablation driver
+│   ├── run_patchings.py        # Patching implementations and CLI
+│   ├── run_ablation_parallel.py# Standalone ablation for completed patching runs
+│   ├── run_ablations.py        # Sequential ablation runner
+│   ├── run_k_pipeline.py       # Resume-safe k-sensitivity workflow
+│   ├── rescore_k_sweep.py      # Re-score saved token-level results at different k
+│   ├── run_queue.py            # Run a queue of experiments
+│   └── report_statistics.py    # Statistical summaries
+├── src/
+│   ├── models.py               # Model registry
+│   ├── tasks.py                # Dataset/task registry and answer parsing
+│   ├── templates.py            # Matched CoT and No-CoT prompt templates
+│   ├── patching.py             # Activation-patching hooks
+│   ├── patching_pipelines.py   # Token-wise scoring and joint patching
+│   ├── ablation.py             # Zero-ablation implementation
+│   ├── metrics.py              # JSD and MRR calculations
+│   ├── analysis.py             # Statistical analysis
+│   └── visualization.py        # Heatmap plotting
+├── prepare_dataset.py          # Build curated datasets and candidate pools
+└── requirements.txt
+\`\`\`
 
-```
+## Installation
 
-## 🛠 Setup & Installation
+Use Python 3.10 or newer. A CUDA-capable GPU is recommended for the full activation-patching sweeps.
 
-1. **Clone the repository:**
-```bash
-git clone <repository-url>
-cd <project-directory>
+\`\`\`bash
+git clone https://github.com/SrknOzturk/CoT_Mechanistic_Interpretability.git
+cd CoT_Mechanistic_Interpretability
 
-```
+python -m venv .venv
+\`\`\`
 
+Activate the environment, then install dependencies:
 
-2. **Install dependencies:**
-```bash
+**Linux/macOS**
+\`\`\`bash
+source .venv/bin/activate
 pip install -r requirements.txt
-
-```
-
-
-3. **Configure NLP tools:**
-```bash
 python -m spacy download en_core_web_sm
+\`\`\`
 
-```
+**Windows PowerShell**
+\`\`\`powershell
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python -m spacy download en_core_web_sm
+\`\`\`
 
-4. **Build the candidate sets** (writes `data/processed/*_candidates.json`, which every
-   experiment reads):
-```bash
+The Llama-3.2-1B checkpoint is gated. Accept its Hugging Face access terms and authenticate before running it:
+
+\`\`\`bash
+hf auth login
+\`\`\`
+
+## Prepare the datasets
+
+The repository includes the source files and prebuilt BIG-bench source splits used by the preparation script. Run:
+
+\`\`\`bash
 python prepare_dataset.py
+\`\`\`
 
-```
+To prepare only one task:
 
-`llama3.2-1b` is a gated repository; run `hf auth login` before using it.
+\`\`\`bash
+python prepare_dataset.py --only svamp
+python prepare_dataset.py --only bigbench_boolean_expressions
+python prepare_dataset.py --only bigbench_web_of_lies
+\`\`\`
 
+The script writes the curated data and candidate pools under \`data/processed/\`. Candidate pools are larger than the target sample count so examples whose CoT generation never reaches the answer anchor can be replaced.
 
-## 📊 Workflow
+## Run the main experiments
 
-### Running one model on one dataset
+A basic run for one model and one task:
 
-`run_parallel.py` is the main entry point. A single invocation runs both patching
-experiments and, unless `--no-ablation` is passed, the ablation that verifies them:
+\`\`\`bash
+python experiments/run_parallel.py \\
+  --model qwen2.5-0.5b \\
+  --dataset svamp \\
+  --target-n 64 \\
+  --workers 1
+\`\`\`
 
-```bash
-python experiments/run_parallel.py --model qwen2.5-0.5b --dataset svamp --target-n 64
-```
+Use the following dataset keys for the main paper:
 
-The fixed Boolean Expressions pool keeps 60 primary questions and 30 automatic
-reserves from lengths 5/6. The reserves replace primary examples that do not
-reach the answer anchor. The selected length-4/5/6 demonstrations are already
-included in the prompts, so the dataset parameter is the only task-specific
-argument:
+\`\`\`text
+svamp
+bigbench_boolean_expressions
+bigbench_web_of_lies
+\`\`\`
 
-```bash
-python experiments/run_parallel.py --dataset bigbench_boolean_expressions
-```
+Repeat the command for each model–dataset combination. The available model keys are \`qwen2.5-0.5b\`, \`olmo2-1b\`, and \`llama3.2-1b\`.
 
-What that covers, for one (model, dataset, template):
+By default, \`run_parallel.py\` runs both the standard Sequential Activation Patching experiment (\`normal\`) and the Random Activation Patching control (\`random\`). It then runs zero-ablation for the selected heads unless \`--no-ablation\` is specified. The random-activation run uses the matching standard-run outputs, so run the default workflow or complete the \`normal\` run before requesting \`random\` by itself.
 
-| Stage | Runs |
+Useful options:
+
+| Option | Purpose |
 |---|---|
-| Patching | `normal` (sequential multi-head patching) and `random` (Gaussian-noise control), each scoring **margin and JSD from one scan** → 4 result files |
-| Ablation | every patching output × every metric × conditions No-CoT and CoT → 8 runs |
+| \`--target-n 64\` | Target number of successfully patched examples; skipped examples can be replaced from the reserve pool. |
+| \`--n N\` | Restrict the candidate pool to its first \`N\` rows before selecting the target and reserve examples. |
+| \`--heads-per-pos 3\` | Number of candidates retained per POS category; the main paper uses \`k = 3\`. |
+| \`--global-top-k K\` | Optionally cap the final joint intervention to the best \`K\` distinct selected units. |
+| \`--no-ablation\` | Run patching without the automatic CoT/No-CoT zero-ablation stage. |
+| \`--workers N\` | Number of worker processes. Start with \`1\` if GPU memory is limited. |
+| \`--gpu-total-gb GB\` | Supply total GPU memory when automatic worker sizing cannot detect it. |
+| \`--max-steps N\` | Maximum CoT token positions scanned per example. |
+| \`--ablation-max-new-tokens N\` | Generation budget for ablation runs. |
+| \`--fresh\` | Discard checkpoints for the requested run and start it from scratch. |
+| \`--dry-run\` | Print the execution plan without loading the model or spawning workers. |
 
-Each ablation run scores three ways per example: unablated, selected heads zeroed,
-and an equally sized random head set zeroed (the control).
+The runner checkpoints progress by example and resumes when the same command is rerun. If a worker encounters CUDA out-of-memory, the parallel runner retries pending work with fewer workers.
 
-Work is sharded across worker processes, checkpointed per example, and retried with
-fewer workers on CUDA OOM — re-running the same command resumes rather than
-recomputes. Omit `--workers` to size the pool from available VRAM;
-`python experiments/plan_compute.py` estimates cost beforehand.
+### Outputs
 
-**Direct-Equation ablation (SVAMP only).** `--equation-ablation` adds a third
-condition whose prompt is the arithmetic alone (`76.0 - 25.0 = The answer is `),
-with no question text and no reasoning cue, controlled against a layer-matched
-random head set. It reads the `Equation` column, so it is rejected on ProntoQA:
+Patching outputs are written to \`results/\`. The default combined runs produce separate files for each metric, for example:
 
-```bash
-python experiments/run_parallel.py --model qwen2.5-0.5b --dataset svamp --target-n 64 --equation-ablation
-```
+\`\`\`text
+results/
+  qwen2.5-0.5b__svamp__step_by_step__normal__margin.json
+  qwen2.5-0.5b__svamp__step_by_step__normal__jsd.json
+  qwen2.5-0.5b__svamp__step_by_step__random__margin.json
+  qwen2.5-0.5b__svamp__step_by_step__random__jsd.json
+  ablation/
+    ...
+\`\`\`
 
-**Decoding penalties (needed for ProntoQA).** Base models fall into verbatim loops
-on ProntoQA's long deductive prompts, and a looping trace never reaches the answer
-trigger — the example is then discarded as a skip rather than measured.
-`--repetition-penalty` and `--no-repeat-ngram-size` are off by default, so SVAMP
-results stay bit-identical, and apply to the reasoning phase only:
+The \`margin\` suffix corresponds to MRR in the paper. Ablation CSVs and checkpoints are stored under \`results/ablation/\` and \`results/checkpoints/\`, respectively.
 
-```bash
-python experiments/run_parallel.py --model qwen2.5-0.5b --dataset prontoqa --target-n 64 \
-    --repetition-penalty 1.15 --no-repeat-ngram-size 8
-```
+## Additional analyses
 
-Values are a starting point, not a tuned setting — check the skip count in the run's
-output and adjust. Whatever is used here must be repeated for `rescore_k_sweep.py`,
-which regenerates the clean trace and rejects it if it differs from the saved one.
+### k-sensitivity analysis
 
-Other knobs: `--ctx`, `--heads-per-pos`, `--global-top-k`, `--max-steps` (patching sweep depth),
-`--ablation-max-new-tokens` (generation budget), `--seed`, `--fresh`, `--dry-run`.
-`--global-top-k` leaves POS candidate selection intact and patches at most K
-distinct units in the final joint patch; omit it to keep the previous behavior.
-It applies to both attention heads and MLP layers. Capped runs have `__topkK`
-in their result and checkpoint names.
-To re-run only ablation against a completed patching run, use
-`run_ablation_parallel.py`, which takes the same flags.
+The k-sweep reuses saved token-level results to evaluate different POS selection budgets without repeating the full localization sweep.
 
-**MLP layers instead of attention heads.** `--component mlp` runs the same
-pipeline on each layer's whole MLP output (`hook_mlp_out`): sequential
-patching, POS-guided selection of `--heads-per-pos` layers per category,
-then (when set) the best `--global-top-k` distinct layers across those
-categories by patching score (higher margin or lower JSD). It also runs a
-random-activation control and zero-ablation against an equally sized random
-set of layers. Results are written under a `__mlp__` tag, so they never
-overwrite the head results. Only the `normal` and `random` experiments support
-it, and `run_ablation_parallel.py` needs the same component and global-k flags
-to find the MLP files:
+\`\`\`bash
+python experiments/run_k_pipeline.py prepare \\
+  --model olmo2-1b --dataset svamp --workers 1 --gpu-total-gb 48
 
-```bash
-python experiments/run_parallel.py --model qwen2.5-0.5b --dataset svamp --target-n 64 --component mlp --heads-per-pos 3 --global-top-k 3 --equation-ablation
-```
+python experiments/run_k_pipeline.py complete \\
+  --model olmo2-1b --dataset svamp \\
+  --margin-k 6 --jsd-k 15 --workers 1 --gpu-total-gb 48
+\`\`\`
 
-**Running a whole study from one command.** `experiments/run_queue.py` runs a
-queue of `run_parallel.py` jobs back to back. A failing job is retried once
-and then skipped rather than stopping the queue; statuses go to
-`results/queue/`, and re-running the same command resumes. `mlp-k-pilot`
-chooses the global k for the MLP component on a held-out SVAMP subset
-(`experiments/make_heldout_subset.py`, compared with
-`experiments/summarize_mlp_k_pilot.py`); `mlp-full --k K` then covers every
-model and dataset:
+Choose \`--margin-k\` and \`--jsd-k\` based on the k-sweep results before running the \`complete\` stage.
 
-```bash
-python experiments/run_queue.py mlp-k-pilot --heads-per-pos 3
-python experiments/summarize_mlp_k_pilot.py
-python experiments/run_queue.py mlp-full --k 3
-```
+### MLP-level interventions
 
-To sweep the global MLP budget using patching scores only, skip the ablation
-stage with `--no-ablation`. The pilot summary still reports patching scores;
-its ablation columns remain blank until ablation is run.
+The code also supports an experimental MLP-level variant, treating each layer's MLP output as one intervention unit:
 
-```bash
-python experiments/run_queue.py mlp-k-pilot --heads-per-pos 3 --ks 1 2 3 4 5 --no-ablation
-python experiments/summarize_mlp_k_pilot.py
-```
+\`\`\`bash
+python experiments/run_parallel.py \\
+  --model qwen2.5-0.5b --dataset svamp \\
+  --target-n 64 --workers 1 --component mlp --heads-per-pos 3
+\`\`\`
 
-### Running the full study
+MLP-level results are stored separately from attention-head results. This extension should be treated as an additional experiment, not as one of the main attention-head results reported in the paper.
 
-Three models × two datasets. Each command is independently resumable:
+## Reproducibility notes
 
-```bash
-# SVAMP
-python experiments/run_parallel.py --model qwen2.5-0.5b --dataset svamp --target-n 64 --equation-ablation
-python experiments/run_parallel.py --model olmo2-1b     --dataset svamp --target-n 64 --equation-ablation
-python experiments/run_parallel.py --model llama3.2-1b  --dataset svamp --target-n 64 --equation-ablation
-
-# ProntoQA
-python experiments/run_parallel.py --model qwen2.5-0.5b --dataset prontoqa --target-n 64 --repetition-penalty 1.15 --no-repeat-ngram-size 8
-python experiments/run_parallel.py --model olmo2-1b     --dataset prontoqa --target-n 64 --repetition-penalty 1.15 --no-repeat-ngram-size 8
-python experiments/run_parallel.py --model llama3.2-1b  --dataset prontoqa --target-n 64 --repetition-penalty 1.15 --no-repeat-ngram-size 8
-```
-
-Models run one at a time: a worker pool is sized per model, and what runs
-concurrently is examples of the *same* model.
-
-### Resume-safe k workflow
-
-`run_parallel.py` selects heads at one fixed budget (`--heads-per-pos`). This
-workflow instead reuses the saved heatmaps to re-derive the selection at many `k`
-values without repeating the expensive sweep. It first reuses or completes normal
-patching, then scores every `k` from 1 through 30:
-
-```bash
-python experiments/run_k_pipeline.py prepare --model olmo2-1b --dataset svamp --workers 1 --gpu-total-gb 48
-```
-
-After inspecting the k-sweep outputs under `results/k_sweep`, choose the k for
-each metric. This command runs one shared random-activation scan and then runs
-CoT and No-CoT ablation for both the normal and random selected heads:
-
-```bash
-python experiments/run_k_pipeline.py complete --model olmo2-1b --dataset svamp --margin-k 6 --jsd-k 15 --workers 1 --gpu-total-gb 48
-```
-
-Every stage uses checkpoints and existing result files. Re-running either
-command resumes missing examples and keeps earlier default-k results intact.
-
-> `run_k_pipeline.py` does not yet forward `--repetition-penalty` /
-> `--no-repeat-ngram-size` to the stages it calls. On ProntoQA, invoke
-> `rescore_k_sweep.py` directly with the same penalties the patching run used, or
-> its clean-trace check will reject the regenerated trace.
-
-### Sequential entry points
-
-`run_patchings.py` and `run_ablations.py` expose the same experiments without
-process parallelism. They are kept for reference and for debugging a single
-example; the parallel path above produces the same output files.
-
-## 🔍 Methodology
-
-* **Sequential Multi-Head Patching:** Unlike naive single-token intervention, our approach tracks the causal influence of heads across the full reasoning trace.
-* **Meta-Controller Hypothesis:** We investigate how CoT tokens coordinate activation flow to calculation and abstraction sub-circuits.
-
+- Use the same model, dataset, template, target count, generation budget, and decoding options when comparing standard and random-activation runs.
+- Some base-model generations may fail to reach the final-answer anchor within the token budget. These are recorded as skipped; the runner can draw replacements from the candidate reserve pool.
+- \`--repetition-penalty\` and \`--no-repeat-ngram-size\` are available for tasks where base models repeat text instead of reaching the answer anchor. They are off by default.
+- The repository contains additional task and exploratory experiment code beyond the main paper workflow. The commands above describe the primary three-model, three-task evaluation.
