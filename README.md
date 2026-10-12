@@ -30,7 +30,6 @@ The main paper evaluates three base models and three reasoning tasks.
 | `bigbench_boolean_expressions` | BIG-bench Boolean Expressions |
 | `bigbench_web_of_lies` | BIG-bench Web of Lies |
 
-The code also retains support for `prontoqa`, an additional synthetic deduction task, but it is not one of the three tasks in the main paper's evaluation.
 
 The default prompt template is `step_by_step`, which uses a one-shot demonstration and an explicit CoT cue on the clean side. The alternative `plan_solve_plus` template is intended for SVAMP experiments; `qa1shot` is retained for reproduction checks.
 
